@@ -1,0 +1,426 @@
+# Comprehensive Guide to LangChain v1: Agents, Model Integration, Tools, Messages, and Structured Outputs
+
+This video tutorial by Krishna provides an in-depth, updated walkthrough on LangChain version 1.1.0 and its recent ecosystem updates. The coverage extends from foundational concepts of generative AI and agentic AI to advanced practices including model integration, streaming and batch processing, sophisticated agent and tool creation, handling diverse message types, and structured outputs utilizing schema validation. The tutorial leverages Python, the UV package manager, and various LLM providers such as OpenAI, Google Gemeni, and Grock.
+
+## 1. Overview and Course Structure
+
+Krishna presents a **10.5-hour comprehensive tutorial** covering evolving topics in generative AI and agentic AI:
+
+- Understanding **generative AI vs. agentic AI**.
+- Mastering **LangGraph** and building **agentic AI applications**.
+- Detailed discussion on **Retrieval-Augmented Generation (RAG)** including traditional, agentic, and vectorless RAG.
+- Deep dive into **deep agents and research agents** with practical implementations.
+- AI security topics like **guardrails** and **LLM evaluation techniques**.
+- Integration and usage of **LLM gateways** for deployment.
+
+The series emphasizes hands-on learning with updated LangChain v1 features.
+
+---
+
+## 2. Setting Up Environment and Package Management
+
+Krishna introduces the **UV package manager**, a fast Python project and package management tool written in Rust, to streamline environment setup and dependencies:
+
+- Installation via platform-specific commands (MacOS/Linux/Windows).
+- Initializing projects with `uv init`.
+- Creating and activating virtual environments using `uv venv`.
+- Managing dependencies with `uv add -r requirements.txt` or individual installs via `uv add <package>`.
+- Encourages always using the **latest LangChain and related libraries** to avoid deprecated features.
+
+Example dependencies include:
+| Package            | Purpose                           |
+|--------------------|---------------------------------|
+| `langchain`        | Core LangChain functionality    |
+| `langchain-community` | Community plugins & tools      |
+| `langchain-openai` | OpenAI model integration         |
+| `langchain-grock`  | Grock models integration         |
+| `langchain-google-genai` | Google Gemeni LLM support   |
+| `ipykernel`        | Jupyter notebook kernel support  |
+
+API keys for **Google AI Studio**, **OpenAI**, and **Grock** are created and stored in an `.env` file for environment variable loading.
+
+---
+
+## 3. Agents: Concept and Implementation
+
+### What Is an Agent?
+
+- An **agent is an autonomous system that can make decisions to use tools based on user input**.
+- Traditional LLMs provide outputs based solely on input but cannot fetch **real-time or external dynamic data**.
+- Agents integrate with **external tools or APIs** (e.g., weather API, search engines) to retrieve context-sensitive data unavailable in pre-trained LLMs.
+
+### Basic Agent Workflow:
+
+1. User inputs query.
+2. Agent decides if an external tool is needed.
+3. Agent routes query to the appropriate tool.
+4. Tool returns context.
+5. LLM combines context and generates output.
+
+This enables response to questions like "What is today's AI news?" by calling Google Search or news API tools.
+
+### LangChain v1 Agent Creation
+
+- Use `langchain.agents.create_agent()` specifying:
+  - `model`: The underlying LLM (e.g., GPT-5).
+  - `tools`: Functions wrapped as tools (can be empty initially).
+  - Optional system prompt for assistant behavior.
+
+### Example Tool Integration
+
+```python
+from langchain.tools import tool
+
+@tool
+def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return f"The weather in {city} is sunny"
+```
+
+- Attach tools to the agent so that **LLM intelligently calls the correct tool based on query**.
+- Agent invocation expects inputs as **messages dictionaries** with roles (`user`, etc.).
+- The agent’s internal reasoning can be verbose (debug info enabled optionally).
+
+---
+
+## 4. Model Integration: OpenAI, Google Gemeni, Grock
+
+### Initialization Methods:
+
+There are two main LangChain-style ways to instantiate LLMs:
+
+| Provider          | LangChain Call                      | Notes                                               |
+|------------------|-----------------------------------|-----------------------------------------------------|
+| **OpenAI**       | `from langchain.chat_models import init_chat_model` <br> `model = init_chat_model("gpt-4.1")` | Also works via `ChatOpenAI` class.                   |
+| **Google Gemeni** | `model = init_chat_model("google-genai:gemini-2.5-flashlight")` | Alternative import: `from langchain.google_genai import ChatGoogleGenerativeAI` |
+| **Grock**        | `model = init_chat_model("grock:quen-32B")` or via `from langchain_grock import ChatGrock` | Still supports similar invocation patterns.          |
+
+### Model Invocation
+
+- Use `model.invoke()` with a message or list of messages.
+- Supports passing **plain text prompts** or structured **message objects**.
+- Outputs an AI-generated response object with `.content`.
+
+---
+
+## 5. Streaming vs Batch Processing
+
+### Streaming Output:
+
+- Enables **progressive output display** while the LLM generates tokens.
+- Greatly improves user experience for long completions.
+- Implemented via `model.stream()`, which returns a generator yielding chunks.
+- Sample code prints chunks with flush and custom delimiters for clarity.
+
+### Batch Processing:
+
+- Sends multiple independent prompts simultaneously.
+- Improves performance and reduces latency for bulk queries.
+- Invoked via `model.batch()` with a list of inputs.
+- Supports concurrency limits (`max_concurrency`) for controlling parallel requests.
+
+---
+
+## 6. Tools: Definition, Creation, and Execution Loop
+
+### What Are Tools?
+
+- Tools encapsulate external functions/APIs that an agent can call to supplement LLM knowledge.
+- Defined as Python functions decorated with `@tool` from `langchain.tools`.
+- Include a **name, argument types, a docstring/definition** describing purpose.
+
+### Tool Creation Example
+
+```python
+from langchain.tools import tool
+
+@tool
+def get_weather(location: str) -> str:
+    """Get weather at a location."""
+    return f"Sunny in {location}"
+```
+
+### Binding Tools to LLMs
+
+- Tools can be **bound directly to models** via `model.bind_tools()`.
+- Alternatively, agents can be created with specified tools via `create_agent()`.
+
+### Tool Execution Loop
+
+- Handles interaction between agent and tools dynamically.
+- When the agent decides to call a tool, it generates a `tool_call` message.
+- The tool executes (e.g., fetches data) and returns context.
+- Context is appended to the message stream and used by the LLM to generate final output.
+
+---
+
+## 7. Messages: Types and Usage in LangChain
+
+**Messages are the fundamental units of context in LangChain.** Each message contains:
+
+- **Role**: Identifies origin/type (`system`, `human`, `AI`, `tool`).
+- **Content**: The text or data payload.
+- **Metadata**: Optional tracing/usage info.
+
+### Message Types
+
+| Message Type     | Description                                            |
+|-----------------|--------------------------------------------------------|
+| **System Message** | Instructions guiding LLM behavior (e.g., persona).    |
+| **Human Message**  | User input or prompts.                                 |
+| **AI Message**     | LLM-generated output, including tool calls metadata. |
+| **Tool Message**   | Output from a tool invoked by the agent.              |
+
+### Using Messages in Code
+
+- You can pass a **list of messages** representing conversation history.
+- Example: setting system role as poetry expert, human role requesting a poem.
+- Metadata can be attached to messages for analysis or user-tracking.
+
+---
+
+## 8. Structured Output: Enforcing Schema on LLM Responses
+
+### Motivation
+
+- Ensuring LLM responses adhere to **predetermined structured formats** enables downstream automation.
+- Useful in production applications needing predictable data formats.
+
+### Supported Schema Methods
+
+| Method       | Description                                                                                   | Validation           |
+|--------------|-----------------------------------------------------------------------------------------------|----------------------|
+| **Pydantic** (recommended) | Robust: supports field validation, descriptions, nested structures                     | Full runtime validation |
+| **TypedDict**            | Simple Python typing-based dictionaries; no runtime validation                           | None                 |
+| **DataClasses**          | Python data classes, typically less used here but supported                              | Partial              |
+
+---
+
+### Pydantic Example:
+
+```python
+from pydantic import BaseModel, Field
+
+class Movie(BaseModel):
+    title: str = Field(..., description="Title of the movie")
+    year: int = Field(..., description="Release year")
+    director: str = Field(..., description="Movie director")
+    rating: float = Field(..., description="Movie rating out of 10")
+```
+
+- LangChain can wrap models with this schema to **parse outputs and validate fields**.
+- Invalid field types raise errors.
+- Supports **nested structures**, e.g., a list of actors within Movie:
+
+```python
+class Actor(BaseModel):
+    name: str
+    role: str
+
+class MovieDetails(BaseModel):
+    title: str
+    year: int
+    cast: list[Actor]
+    genres: list[str]
+    budget: float = Field(None, description="Budget in million USD")
+```
+
+---
+
+### TypedDict Alternative:
+
+- Simpler, uses Python type hints without required runtime validation.
+- Suited for cases where strict schema enforcement is less critical.
+
+```python
+from typing import TypedDict, Annotated
+
+class MovieDict(TypedDict):
+    title: Annotated[str, "Title of the movie"]
+    year: Annotated[int, "Release year"]
+    director: Annotated[str, "Director of the movie"]
+    rating: Annotated[float, "Movie rating out of 10"]
+```
+
+- Can be used similarly with LangChain's `with_structured_output()`.
+
+---
+
+## Key Insights
+
+- **LangChain v1 dramatically simplifies agent creation** with updated APIs allowing easier model-tool integration.
+- **Streaming and batch processing are critical for responsive, scalable LLM applications**.
+- **Tools remain a core component to enhance LLM abilities beyond static pretrained knowledge**.
+- **Messages provide a flexible communication model representing conversation state with clear role definitions**.
+- **Structured output is essential in production LLM apps to enforce response schema, improve reliability, and integrate with other systems**.
+- The tutorial adopts **modern Python tools like pydantic and typing extensions** for schema validation.
+- Using **UV package manager** greatly improves dependency and environment management efficiency.
+
+---
+
+This tutorial serves as a thorough blueprint for building agentic AI applications with LangChain v1, guiding end-to-end through environment setup, model usage, agent-tool integration, messaging system, and advanced structured response handling to deliver professional-grade, scalable LLM-powered solutions.
+
+
+# Comprehensive Guide to Agentic AI, LangChain, and Generative AI Application Development
+
+## Summary
+
+This video offers an in-depth crash course on agentic AI, LangChain, and generative AI principles, combining theory with extensive hands-on coding practice. It covers foundational concepts like generative AI, large language models (LLMs), transformer architecture, and critical sampling strategies before diving into practical implementations using Google Gemini and Grok APIs.
+
+The instructor guides viewers through building two substantial real-world projects: a **shopping agent** (similar to Amazon's Rufus AI) with multimodal AI capabilities allowing product search via text and images, and a **telecom chatbot** that leverages retrieval-augmented generation (RAG) using diverse data sources like CSV, SQLite, and PDFs.
+
+Additionally, the course explores AI agent fundamentals, including tools integration, memory management, multi-agent orchestration, multimodal AI, evaluation techniques with LangSmith, guardrails for safe deployment, and deploying projects with frameworks like Streamlit. The curriculum culminates in practical assignments designed to solidify knowledge and boost AI engineering portfolios, with suggestions for extending project features and deploying production-grade solutions.
+
+## Highlights
+- 🤖 Detailed explanation of generative AI and transformer architecture fundamentals.
+- 💻 Hands-on coding with LangChain framework and Google/Grok AI models.
+- 🛒 Development of a shopping agent with text and image-based product search and order placement.
+- 📞 Building a telecom retrieval-augmented generation (RAG) chatbot from multiple heterogeneous knowledge sources.
+- 🔄 Integration of memory and multi-agent systems for complex autonomous AI workflows.
+- 🖼️ Demonstration of multimodal AI use cases for image analysis combined with LLM processing.
+- 🛡️ Best practices for AI agent evaluation, cost management, and deploying safety guardrails.
+
+## Key Insights
+
+- 🤔 **Generative AI vs Traditional AI:** Generative AI creates new content (text, images, code) using LLMs based on the transformer architecture, while traditional AI (like fraud detection) relies on statistical models for classification, not generation.
+
+- 🔍 **Transformer Architecture Explained:** LLMs predict the next token in a sequence based on probabilistic patterns learned from massive internet-scale data. Parameters like **temperature**, **top-K**, and **top-P** control creativity and randomness in outputs, balancing determinism and novelty.
+
+- 📚 **Retrieval-Augmented Generation (RAG) Is Crucial for Large Knowledge Bases:** Since LLMs have context window limits, RAG systems chunk large documents into semantically embedded vectors stored in vector databases (e.g., Chroma DB). For queries, only relevant chunks are retrieved and passed to LLMs, improving accuracy and reducing cost by minimizing tokens processed.
+
+- 🛠️ **AI Agent Composition Involves LLM + Tools + Memory + Knowledge:** Agents autonomously execute multi-step reasoning and act by combining LLM brains with API-tool access (product databases, reviews, checkout), persistent or session memory, and external knowledge. This autonomy enables complex workflows, exemplified by shopping assistants like Amazon's Rufus AI.
+
+- 💾 **Memory Integration Enhances Context Awareness:** Agents with memory maintain session or persistent context, enabling follow-up queries and coherent conversations, emulating ChatGPT-like interaction continuity.
+
+- 🧩 **Multi-Agent Architectures Handle Complex Tasks by Collaboration:** Larger systems split responsibilities across specialized agents (e.g., product search, checkout, review analysis), enabling scalable, maintainable, and modular AI workflows.
+
+- 🖼️ **Multimodal AI Extends LLM Capabilities Beyond Text:** By incorporating image, audio, and video inputs via multimodal LLMs like Lama for Scout, AI systems can extract and analyze data from diverse formats (e.g., medical images), enhancing application versatility.
+
+- ⚖️ **Evaluation and Guardrails Are Essential for Enterprise-Grade AI:** Since AI agents produce probabilistic outputs, evaluation frameworks like LangSmith use semantic similarity scoring and track latency and cost. Guardrails prevent toxic outputs, data leaks (PII), and out-of-scope responses, protecting users and brands from risks like hallucination and jailbreak attacks.
+
+- 📊 **LangChain Ecosystem Simplifies AI Application Development:** Frameworks like LangChain for building agents, LangGraph for granular control, and LangSmith for observability streamlines the process of creating, deploying, and monitoring AI agents.
+
+- 🚀 **Project-Based Learning with Real-World Applications Is Key:** Building projects like shopping agents with SQLite-backed product and order management, and telecom chatbots leveraging multi-source RAG pipelines, enables learners to demonstrate skills crucial for AI engineering job roles.
+
+## Detailed Summary
+
+### Introduction to Generative AI and Language Models
+The course begins by defining **generative AI** as AI that creates new content (text, images, audio, code), powered by **large language models (LLMs)** like GPT-3/4, Claude, and Google Gemini. It distinguishes generative AI from traditional AI systems that use statistical ML models (e.g., XGBoost, random forest) primarily for classification tasks, not content generation.
+
+Transformers, introduced by the seminal "Attention is All You Need" paper, underpin LLMs. These models generate content by predicting the next token in a sequence using self-attention mechanisms, leveraging vast datasets. Sampling parameters like temperature, top-K, and top-P affect creativity and randomness. The course also explains tokens and the importance of the **context window**—the maximum tokens an LLM can handle in one prompt (ranging from thousands to over a million tokens in modern models).
+
+### Hands-On with LangChain and LLM API Calls
+Viewers learn how to set up API keys with Google AI Studio and Grok Cloud, and programmatically call LLMs to generate responses. Basic calls cover text generation with or without system prompts for constrained answers, controlling token sampling with parameters like temperature.
+
+They then build a simple health data analysis app which extracts medical test values from text blood reports, classifies them as high/low/normal, and provides personalized dietary recommendations. This introduces **prompt engineering** and workflows where multiple sequential LLM calls perform subtasks.
+
+### Retrieval-Augmented Generation (RAG)
+Large private data (e.g., company HR policies) cannot be fully consumed by LLMs due to token limits and cost. RAG addresses this by:
+
+1. Chunking documents into manageable pieces with overlaps to retain context.
+2. Converting chunks into **vector embeddings** which represent semantic meaning.
+3. Storing embeddings in **vector databases** like ChromaDB.
+4. Upon a user query, embedding the query, retrieving relevant chunks by semantic similarity, and prompting the LLM with only those chunks.
+
+This architecture increases answer accuracy by grounding in reliable sources while decreasing token usage and associated API costs.
+
+### Vector Database Basics
+The course demonstrates vector database usage with ChromaDB, showing how documents and queries are embedded, stored, and retrieved by meaning rather than exact keyword matches, enabling contextually relevant search results.
+
+### Building a Simple Sales Agent — Tools, Agents, and Memory
+Learners create an agent that accesses product and reviews data from Python dictionaries, showcasing:
+
+- Tool definition with descriptive docstrings guiding the agent on what each function does.
+- Agent autonomously deciding which tool to invoke based on the question intent, enabled by LLM interpretation.
+- Adding memory so agents can reference prior conversation context, allowing multi-turn interaction similar to ChatGPT.
+
+Multiple tools can co-exist, and the agent dynamically calls appropriate ones. The agent demonstrates **react loops**—reasoning, acting, and observing—to accomplish complex tasks.
+
+### Multi-Agent Systems and Agency Levels
+More advanced systems comprise multiple agents focusing on subtasks, e.g., product search, checkout, review analysis. Levels of agency vary:
+
+- Low: ChatGPT-like apps answering questions with limited external tool access.
+- Medium: Automation platforms like Zapier integrating APIs.
+- High: Cloud Code orchestrates multi-step autonomous coding.
+- Very High: Open Claw runs autonomous systems with broad tool access but reduced predictability.
+
+Trade-offs exist between agency and control; high autonomy can lead to unpredictable behavior.
+
+### Multimodal AI Use Cases
+Multimodal LLMs accept images/audio alongside text. The video shows:
+
+- Using a vision-capable LLM (Grok’s Lama for Scout) to extract structured data from images of blood reports.
+- Encoding images as base64 strings for model consumption.
+- Combining multi-input analysis with downstream tools for health advice generation.
+
+This expands AI applications in domains with mixed data types, such as healthcare insurance.
+
+### AI Agent Evaluation and Safety
+Because AI outputs are probabilistic, evaluation requires alternatives to exact matching. Frameworks use semantic similarity (e.g., cosine similarity), latency, cost metrics, and toxicity scanning.
+
+Guardrails mitigate risks like hallucinations, PII leaks, jailbreak attacks, and out-of-scope responses by middleware filters, prompt restrictions, and content redaction.
+
+The Air Canada chatbot lawsuit and Chipotle bot misuse highlight the necessity of robust safeguards.
+
+### Building and Deploying the Shopping Agent Project
+The tutorial walks through:
+
+- SQL schema for products, reviews, and orders.
+- Python modules as tools querying SQLite.
+- Connecting tools with LLM agent and writing effective system prompts to guide behavior.
+- Building the Streamlit UI to interact, display product search and ordering.
+- Extending with multimodal image search by uploading images, performing semantic similarity search with vision model.
+- Managing conversational history with session state.
+- Encouraging project iterations and LinkedIn sharing to boost career prospects.
+
+### Building the Telecom RAG Chatbot Project
+The telecom chatbot uses three data sources: SQLite tickets, CSV FAQs, and PDF manuals. The RAG pipeline involves:
+
+- Indexing diverse formats by extracting text, chunking, and embedding.
+- Storing in vector DB with separate collections.
+- Using retrievers to fetch top related chunks per data source.
+- Prompting the LLM with combined context to answer customer queries.
+- Implementing a Streamlit interface with chat-like session memory.
+
+This project illustrates practical enterprise chatbot use cases.
+
+### Tools and Framework Ecosystem
+LangChain emerges as a dominant framework to build AI agents encompassing workflows, chaining prompts, and integrating tools. LangSmith supports evaluation and observability, while LangGraph offers lower-level control for complex needs.
+
+No-code platforms like Zapier or n8n enable rapid prototyping but with less flexibility.
+
+## Conclusion
+This comprehensive course balances theoretical understanding with real-world application development of generative AI and agentic systems. It equips learners with:
+
+- Foundational knowledge of transformers and LLMs.
+- Practical skills to build, deploy, and evaluate agentic AI applications.
+- Understanding of multi-agent architectures, multimodal AI, and safety considerations.
+- Experience with popular open-source tools and cloud APIs.
+- Valuable projects suitable for resumes and interview discussions.
+
+By mastering these frameworks and concepts, learners can confidently contribute to the rapidly evolving field of AI engineering in industry settings.
+
+---
+
+# How to Build Agentic AI Applications with LangChain: Concepts, Tools, and Practical Projects
+
+## Highlights
+- 🤖 Foundational primer on generative AI, LLMs, and transformer mechanisms including token sampling strategies.
+- 🧰 Hands-on use of LangChain and cloud APIs to programmatically call large language models.
+- 🛒 Building a fully functional shopping agent with multi-tool integration and memory for autonomous ordering.
+- 📚 Designing telecom customer care chatbot using retrieval-augmented generation with diverse knowledge sources.
+- 🖼️ Using multimodal AI models for image-to-text extraction in healthcare scenarios.
+- ⚖️ Emphasizing AI agent evaluation techniques and guardrails for safe, reliable deployment.
+- 🚀 Encouragement for learners to build, improve, deploy, and showcase AI projects to gain industry readiness.
+
+## Key Insights
+- 🤖 **Generative AI innovates by content creation, powered by transformer-based LLMs that predict tokens via self-attention trained on massive datasets.**
+- 💡 **Sampling parameters (temperature, top-K/P) finely tune creativity vs determinism in generated outputs, essential for various use cases like code generation or creative writing.**
+- 📊 **RAG architecture addresses LLM token limits by chunking documents into semantically embedded vectors stored in vector DBs, efficiently grounding responses and cutting costs.**
+- 🛠️ **Agentic AI combines LLM "brains" with tool APIs, external knowledge, and memory to perform autonomous multi-step tasks resembling human problem-solving workflows.**
+- 💾 **Memory retention within agents enables contextual multi-turn interactions, critical for natural conversational AI experiences.**
+- 🧩 **Complex problems benefit from multi-agent systems where agents collaborate, distributing responsibility across specialized modules for robust solutions.**
+- 🖼️ **Multimodal AI broadens model inputs to images/audio alongside text, unlocking new application domains such as medical record interpretation.**
+- ⚠️ **Evaluation frameworks and guardrails mitigate inherent AI risks such as hallucination, unsafe outputs, and data leaks, critical for enterprise AI trustworthiness.**
+- 🛠️ **LangChain ecosystem and complementary tools streamline AI app creation, observability, and deployment, accelerating the development lifecycle.**
+- 📈 **Project-centric learning with meaningful real-world applications notably increases employability and demonstrates practical expertise in AI engineering roles.**
