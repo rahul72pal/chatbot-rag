@@ -58,17 +58,27 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Custom request-response logging middleware
+app.add_middleware(LoggingMiddleware)
+
 # CORS middleware configuration
+origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "https://chatbot-ui-navy-eight-17.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to specific domains in production environments
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.onrender\.com|http://localhost:.*|http://127\.0\.0\.1:.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
-
-# Custom request-response logging middleware
-app.add_middleware(LoggingMiddleware)
 
 # Include routes (mount without prefix so `/message` is available directly at root)
 app.include_router(api_router)
