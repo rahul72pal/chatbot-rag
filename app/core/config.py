@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "FastAPI DeepSeek Chatbot"
     DEBUG: bool = False
     API_PREFIX: str = "/api/v1"
-    PORT: int = int(os.getenv("PORT", "8000"))
+    PORT: int = int(os.getenv("PORT", "8000")) or 8000
     HOST: str = os.getenv("HOST", "0.0.0.0")
 
     # HTTP Client Configuration
