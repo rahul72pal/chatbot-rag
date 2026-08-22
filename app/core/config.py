@@ -33,8 +33,15 @@ class Settings(BaseSettings):
     APP_NAME: str = "FastAPI DeepSeek Chatbot"
     DEBUG: bool = False
     API_PREFIX: str = "/api/v1"
-    PORT: int = int(os.getenv("PORT", "8000")) or 8000
-    HOST: str = os.getenv("HOST", "0.0.0.0")
+    PORT: int = int(os.environ.get("PORT", "8000"))
+    HOST: str = "0.0.0.0"
+
+    @property
+    def server_port(self) -> int:
+        port_env = os.environ.get("PORT")
+        if port_env and port_env.isdigit():
+            return int(port_env)
+        return self.PORT
 
     # HTTP Client Configuration
     DEEPSEEK_TIMEOUT: float = 30.0
