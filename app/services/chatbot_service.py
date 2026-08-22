@@ -5,6 +5,7 @@ from app.schemas.chatbot import ChatbotCreate, ChatbotUpdate
 
 class ChatbotService:
     def __init__(self, mongo_db: Any) -> None:
+        self._db = mongo_db
         self._collection = mongo_db["chatbots"]
 
     async def create_chatbot(self, user_id: str, data: ChatbotCreate) -> Dict[str, Any]:
@@ -42,11 +43,17 @@ class ChatbotService:
 
 
     async def get_user_chatbots(self, user_id: str) -> List[Dict[str, Any]]:
-        """Retrieves all chatbots belonging to a specific user."""
+        """Retrieves all chatbots belonging to a specific user with message and conversation counts."""
         cursor = self._collection.find({"user_id": user_id})
         chatbots = []
         async for doc in cursor:
-            doc["id"] = doc.pop("_id")
+            bot_id = str(doc["_id"])
+            doc["id"] = bot_id
+            del doc["_id"]
+            
+            # Compute actual conversations count and messages count for this chatbot
+            doc["conversations_count"] = await self._db["conversations"].count_documents({"chatbot_id": bot_id})
+            doc["messages_count"] = await self._db["messages"].count_documents({"chatbot_id": bot_id})
             chatbots.append(doc)
         return chatbots
 

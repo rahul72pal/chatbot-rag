@@ -57,6 +57,8 @@ class ChatbotResponse(BaseModel):
     pop_after_seconds: Optional[int] = 3
     show_welcome_tooltip: Optional[bool] = False
     welcome_message: Optional[str] = "Hi! How can I help you today?"
+    conversations_count: Optional[int] = 0
+    messages_count: Optional[int] = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
 

@@ -76,21 +76,7 @@ async def get_dashboard_stats(
     active_chatbots = await chatbots_col.count_documents({"user_id": user_id, "$or": [{"status": "active"}, {"status": {"$exists": False}}]})
 
     total_conversations = await conversations_col.count_documents({"user_id": user_id})
-
-    pipeline = [
-        {"$match": {"user_id": user_id}},
-        {"$project": {"message_count": {"$size": {"$ifNull": ["$messages", []]}}}},
-        {"$group": {"_id": None, "total_messages": {"$sum": "$message_count"}}}
-    ]
-    cursor = conversations_col.aggregate(pipeline)
-    total_messages = 0
-    async for doc in cursor:
-        total_messages = doc.get("total_messages", 0)
-
-    # Fallback message count from messages collection if 0
-    if total_messages == 0:
-        total_messages = await mongo_db["messages"].count_documents({"user_id": user_id})
-
+    total_messages = await mongo_db["messages"].count_documents({"user_id": user_id})
     total_documents = await documents_col.count_documents({"user_id": user_id})
 
     return {
