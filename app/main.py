@@ -75,9 +75,10 @@ app.include_router(api_router)
 app.include_router(auth_router)
 
 
-@app.get("/health", status_code=status.HTTP_200_OK, tags=["System"])
+@app.api_route("/", methods=["GET", "HEAD"], status_code=status.HTTP_200_OK, tags=["System"])
+@app.api_route("/health", methods=["GET", "HEAD"], status_code=status.HTTP_200_OK, tags=["System"])
 async def health_check() -> dict:
-    """Basic health check route."""
+    """Basic root & health check route supporting GET and HEAD for Render cloud deployment."""
     return {
         "status": "healthy",
         "app_name": settings.APP_NAME
@@ -165,3 +166,8 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=error_response.model_dump()
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)
