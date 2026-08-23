@@ -41,9 +41,17 @@ async def upload_document(
             detail="Chatbot not found or access denied."
         )
 
+    # Enforce max 2 linked documents per chatbot limit
+    existing_docs_count = await document_service.count_documents_by_chatbot(chatbot_id=chatbot_id)
+    if existing_docs_count >= 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Limit reached: Each chatbot can only be linked to a maximum of 2 documents."
+        )
+
     logger.info(f"Received document upload request for chatbot {chatbot_id} by user {user_id}: {file.filename}")
 
-    # Calculate human-readable file size and validate 10 MB limit
+    # Calculate human-readable file size and validate 2 MB limit
     file_size_bytes = 0
     try:
         file.file.seek(0, os.SEEK_END)
@@ -52,11 +60,11 @@ async def upload_document(
     except Exception:
         pass
 
-    MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB limit
+    MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB limit
     if file_size_bytes > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File size ({file_size_bytes / (1024 * 1024):.1f} MB) exceeds the maximum allowed limit of 10 MB."
+            detail=f"File size ({file_size_bytes / (1024 * 1024):.1f} MB) exceeds the maximum allowed limit of 2 MB."
         )
 
     if file_size_bytes > 1024 * 1024:

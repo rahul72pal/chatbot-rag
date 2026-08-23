@@ -10,6 +10,15 @@ class ChatbotService:
 
     async def create_chatbot(self, user_id: str, data: ChatbotCreate) -> Dict[str, Any]:
         """Creates a new chatbot for a user."""
+        # Enforce max 5 chatbots per user account limit
+        existing_count = await self._collection.count_documents({"user_id": user_id})
+        if existing_count >= 5:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail="Limit reached: You can create a maximum of 5 chatbots per account."
+            )
+
         chatbot_doc = data.model_dump()
         chatbot_doc["_id"] = str(uuid4())
         chatbot_doc["user_id"] = user_id
