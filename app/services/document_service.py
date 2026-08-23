@@ -78,6 +78,12 @@ class DocumentService:
         doc_record["point_ids"] = point_ids
         return doc_record
 
+    async def count_documents_by_chatbot(self, chatbot_id: str) -> int:
+        """Returns the number of documents linked to a chatbot."""
+        if self._collection is None:
+            return 0
+        return await self._collection.count_documents({"chatbot_id": chatbot_id})
+
     async def get_user_documents(self, user_id: str, chatbot_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieves document records belonging to a user, optionally filtered by chatbot_id."""
         if self._collection is None:

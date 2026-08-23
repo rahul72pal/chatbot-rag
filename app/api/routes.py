@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import message, document, chatbot, conversation, user_llm_config
+from app.api import message, document, chatbot, conversation, user_llm_config, analytics
 
 api_router = APIRouter()
 
@@ -9,3 +9,4 @@ api_router.include_router(document.router, tags=["Documents"])
 api_router.include_router(chatbot.router, tags=["Chatbot Management"])
 api_router.include_router(conversation.router, tags=["Conversations Management"])
 api_router.include_router(user_llm_config.router, tags=["LLM Configurations"])
+api_router.include_router(analytics.router, tags=["Analytics"])
