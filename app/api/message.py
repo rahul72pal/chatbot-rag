@@ -93,10 +93,6 @@ async def post_message(
                     detail="Chatbot not found or access denied."
                 )
 
-        current_user_id.set(user_id)
-        current_chatbot_id.set(chatbot_id)
-        current_llm_config.set(llm_config)
-
         logger.info(f"Incoming chat request for conversation: {conversation_id} (chatbot: {chatbot_id})")
 
         # Add user's message to history
@@ -126,6 +122,10 @@ async def post_message(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="LLM configuration not found for user. Please configure your API key and model at /llm-config."
             )
+
+        current_user_id.set(user_id)
+        current_chatbot_id.set(chatbot_id)
+        current_llm_config.set(llm_config)
 
         full_history = history
 
@@ -234,10 +234,6 @@ async def post_message_stream(
                 detail="Chatbot not found or access denied."
             )
 
-    current_user_id.set(user_id)
-    current_chatbot_id.set(chatbot_id)
-    current_llm_config.set(llm_config)
-
     await conversation_service.add_message(
         conversation_id=conversation_id,
         role=ROLE_USER,
@@ -264,6 +260,10 @@ async def post_message_stream(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="LLM configuration not found for user. Please configure your API key and model at /llm-config."
         )
+
+    current_user_id.set(user_id)
+    current_chatbot_id.set(chatbot_id)
+    current_llm_config.set(llm_config)
 
     full_history = history
 
