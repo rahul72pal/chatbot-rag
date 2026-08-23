@@ -39,6 +39,7 @@ class UserLLMConfigCreate(BaseModel):
                 raise ValueError("base_url must be specified when config_type is 'custom'")
             if not self.model:
                 raise ValueError("model must be specified when config_type is 'custom'")
+            self.provider = "custom"
         return self
 
 
