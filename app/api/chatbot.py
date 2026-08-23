@@ -20,7 +20,7 @@ from app.services.user_llm_config_service import UserLLMConfigService
 from app.schemas.chatbot import ChatbotCreate, ChatbotUpdate, ChatbotResponse
 from app.core.logger import logger
 
-from app.core.context import current_user_id, current_chatbot_id
+from app.core.context import current_user_id, current_chatbot_id, current_llm_config
 
 router = APIRouter(prefix="/chatbot")
 
@@ -275,6 +275,8 @@ async def public_chatbot_chat(
     if not llm_config:
         llm_config = await user_llm_config_service.get_raw_user_config_by_user_id(user_id=owner_user_id)
 
+    current_llm_config.set(llm_config)
+
     bot_reply = "Server issue: Please contact the chatbot owner."
     try:
         res = await agent_service.get_chat_response(
@@ -410,6 +412,8 @@ async def public_chatbot_chat_stream(
         llm_config = await user_llm_config_service.get_raw_config(config_id=llm_config_id, user_id=owner_user_id)
     if not llm_config:
         llm_config = await user_llm_config_service.get_raw_user_config_by_user_id(user_id=owner_user_id)
+
+    current_llm_config.set(llm_config)
 
     async def event_generator():
         yield f"data: {json.dumps({'type': 'conversation', 'conversation_id': conversation_id, 'chatbot_id': chatbot_id}, default=str)}\n\n"
