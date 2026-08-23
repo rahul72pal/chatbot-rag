@@ -18,7 +18,7 @@ from app.services.agent_service import AgentService
 from app.services.chatbot_service import ChatbotService
 from app.services.user_llm_config_service import UserLLMConfigService
 from app.utils.helpers import measure_latency
-from app.core.context import current_user_id, current_chatbot_id
+from app.core.context import current_user_id, current_chatbot_id, current_llm_config
 
 router = APIRouter()
 
@@ -95,6 +95,7 @@ async def post_message(
 
         current_user_id.set(user_id)
         current_chatbot_id.set(chatbot_id)
+        current_llm_config.set(llm_config)
 
         logger.info(f"Incoming chat request for conversation: {conversation_id} (chatbot: {chatbot_id})")
 
@@ -235,6 +236,7 @@ async def post_message_stream(
 
     current_user_id.set(user_id)
     current_chatbot_id.set(chatbot_id)
+    current_llm_config.set(llm_config)
 
     await conversation_service.add_message(
         conversation_id=conversation_id,

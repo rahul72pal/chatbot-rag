@@ -83,22 +83,56 @@ class StreamEventNormalizer:
         if isinstance(reasoning, str):
             norm.reasoning += reasoning
 
-        # Filter out explicit protocol markers from text
-        for marker in cls.INTERNAL_MARKERS:
-            if marker in norm.text:
-                norm.text = norm.text.replace(marker, "")
+        # Filter out explicit protocol markers and thinking blocks from text
+        if norm.text:
+            if "<think>" in norm.text or "</think>" in norm.text:
+                think_match = re.findall(r'<think>([\s\S]*?)(?:</think>|$)', norm.text, flags=re.IGNORECASE)
+                if think_match:
+                    norm.reasoning += " ".join(think_match)
+                norm.text = clean_thinking_text(norm.text)
+            elif "Here's a thinking process:" in norm.text or "Thinking Process:" in norm.text:
+                norm.reasoning += norm.text
+                norm.text = clean_thinking_text(norm.text)
+            else:
+                for marker in cls.INTERNAL_MARKERS:
+                    if marker in norm.text:
+                        norm.text = norm.text.replace(marker, "")
 
         return norm
 
 
 def clean_thinking_text(text: str) -> str:
-    """Final sanitizer layer to clean leftover protocol markers from complete response."""
+    """Final sanitizer layer to clean leftover reasoning/thinking blocks and protocol markers from complete response."""
     if not text:
         return text
+
+    # 1. Strip complete <think>...</think> tags
     text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE)
+    # 2. Strip unclosed <think>... tags up to end of text
+    text = re.sub(r'<think>[\s\S]*$', '', text, flags=re.IGNORECASE)
+
+    # 3. Strip "Here's a thinking process:" or "Thinking Process:" blocks
+    text = re.sub(r'(?:Here\'s a thinking process|Thinking Process|\[Thinking Process\])[\s\S]*?(?=\n\n[A-Z0-9]|\n[A-Z0-9]|\Z)', '', text, flags=re.IGNORECASE)
+
+    # 4. Strip protocol markers
     text = re.sub(r'<\|DSML\|>[\s\S]*?</\|DSML\|>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'<function>[\s\S]*?</function>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', text, flags=re.IGNORECASE)
+
+    # 5. Strip explicit step-by-step thinking preambles (e.g. "1. Analyze User Input: ... 2. Identify Core Question:")
+    if re.search(r'1\.\s*Analyze User Input:', text, flags=re.IGNORECASE):
+        match = re.search(r'(?:1\.\s*Analyze User Input:[\s\S]*?)(?:\d+\.\s*(?:Retrieve|Formulate|Structure|Respond)[\s\S]*?\n\n|\n\n(?=[A-Z0-9]))([\s\S]*)', text, flags=re.IGNORECASE)
+        if match and match.group(1).strip():
+            text = match.group(1).strip()
+        else:
+            text = re.sub(r'1\.\s*Analyze User Input:[\s\S]*$', '', text, flags=re.IGNORECASE).strip()
+
+    # 6. Strip query rewriter JSON blocks if echoed by agent
+    text = re.sub(r'^\s*\{\s*"queries"\s*:\s*\[[\s\S]*?\]\s*,\s*"keywords"\s*:\s*\[[\s\S]*?\]\s*\}\s*', '', text, flags=re.IGNORECASE)
+
+    for marker in ["<think>", "</think>", "<|DSML|>", "</|DSML|>", "<function>", "</function>", "<tool_call>", "</tool_call>"]:
+        text = text.replace(marker, "")
+
     return text.strip()
 
 
@@ -122,11 +156,13 @@ class TokenAndReasoningCallbackHandler(AsyncCallbackHandler):
                         self.total_completion_tokens += usage.get("output_tokens", 0)
                         self.total_tokens += usage.get("total_tokens", 0)
                     else:
-                        metadata = message.response_metadata
-                        token_usage = metadata.get("token_usage", {})
-                        self.total_prompt_tokens += token_usage.get("prompt_tokens", 0)
-                        self.total_completion_tokens += token_usage.get("completion_tokens", 0)
-                        self.total_tokens += token_usage.get("total_tokens", 0)
+                        metadata = getattr(message, "response_metadata", {}) or {}
+                        if isinstance(metadata, dict):
+                            token_usage = metadata.get("token_usage", {}) or metadata.get("usage", {})
+                            if isinstance(token_usage, dict):
+                                self.total_prompt_tokens += token_usage.get("prompt_tokens", 0) or token_usage.get("input_tokens", 0)
+                                self.total_completion_tokens += token_usage.get("completion_tokens", 0) or token_usage.get("output_tokens", 0)
+                                self.total_tokens += token_usage.get("total_tokens", 0)
                     
                     reasoning = (
                         message.additional_kwargs.get("reasoning_details")
@@ -176,7 +212,6 @@ def create_anthropic_model(
             temperature=temperature,
             max_tokens=max_tokens,
             request_timeout=600,
-            http_async_client=http_async_client,
         )
 
 
@@ -207,7 +242,6 @@ def create_gemini_model(
             temperature=temperature,
             max_tokens=max_tokens,
             request_timeout=600,
-            http_async_client=http_async_client,
         )
 
 
@@ -277,11 +311,9 @@ def create_openrouter_model(
         model=model,
         openrouter_api_key=api_key,
         streaming=True,
-        reasoning={"effort": "medium"},
         temperature=temperature,
         max_tokens=max_tokens,
         request_timeout=600,
-        http_async_client=http_async_client
     )
 
 
@@ -390,11 +422,13 @@ class AgentService:
     def _create_agent_executor(
         self,
         llm_config: Optional[Dict[str, Any]] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        behavior: Optional[str] = None
     ):
         """Compiles an agent executor with specified model configuration and system prompt."""
+        custom_behavior = system_prompt if system_prompt is not None else behavior
         model = self._get_llm_model(llm_config)
-        prompt = self.prompt_service.get_system_prompt(behavior=system_prompt)
+        prompt = self.prompt_service.get_system_prompt(behavior=custom_behavior)
 
         try:
             from langchain.agents.middleware import SummarizationMiddleware
@@ -448,18 +482,24 @@ class AgentService:
 
         full_content = ""
         full_reasoning = ""
+        active_tool_depth = 0
+
+        # Reset document search attempt counter at start of turn
+        from app.utils.tool import reset_search_counter
+        reset_search_counter()
 
         try:
             logger.info("Streaming agent execution events...")
             async for event in agent_executor.astream_events(
                 {"messages": lc_messages},
                 version="v2",
-                config={"callbacks": [callback_handler]}
+                config={"callbacks": [callback_handler], "recursion_limit": 10}
             ):
                 event_kind = event.get("event")
                 event_name = event.get("name", "")
 
                 if event_kind == "on_tool_start":
+                    active_tool_depth += 1
                     tool_input = event.get("data", {}).get("input")
                     query_str = ""
                     if isinstance(tool_input, dict):
@@ -482,6 +522,7 @@ class AgentService:
                     }
 
                 elif event_kind == "on_tool_end":
+                    active_tool_depth = max(0, active_tool_depth - 1)
                     yield {
                         "type": "status",
                         "status": "tool_completed",
@@ -490,6 +531,10 @@ class AgentService:
                     }
 
                 elif event_kind == "on_chat_model_stream":
+                    # Ignore LLM stream deltas emitted by inner tool models while a tool is executing
+                    if active_tool_depth > 0:
+                        continue
+
                     chunk = event.get("data", {}).get("chunk")
                     if chunk:
                         norm = StreamEventNormalizer.normalize_chunk(chunk)
@@ -500,7 +545,7 @@ class AgentService:
 
                         if norm.reasoning:
                             full_reasoning += norm.reasoning
-                            yield {"type": "reasoning_delta", "delta": norm.reasoning}
+                            # yield {"type": "reasoning_delta", "delta": norm.reasoning}
 
                 elif event_kind == "on_chat_model_end":
                     output = event.get("data", {}).get("output")
@@ -546,7 +591,11 @@ class AgentService:
 
         except Exception as exc:
             logger.exception(f"Error in astream_chat_response: {exc}")
-            fallback_msg = "Server issue: Please contact the chatbot owner."
+            err_str = str(exc)
+            if "Recursion limit" in err_str or "GraphRecursionError" in str(type(exc)):
+                fallback_msg = "Information search reached maximum retry attempts without finding conclusive facts. Please refine your query or verify uploaded documents."
+            else:
+                fallback_msg = "Server issue: Please contact the chatbot owner."
             yield {
                 "type": "text_delta",
                 "delta": fallback_msg
@@ -574,7 +623,7 @@ class AgentService:
             
             response = await agent_executor.ainvoke(
                 {"messages": lc_messages},
-                config={"callbacks": [callback_handler]}
+                config={"callbacks": [callback_handler], "recursion_limit": 10}
             )
             
             if isinstance(response, dict) and "messages" in response:

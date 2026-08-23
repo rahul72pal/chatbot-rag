@@ -47,6 +47,8 @@ class PromptService:
         Returns the complete system prompt, replacing {{behavior}} with user instructions
         and {current_time_str} with current datetime.
         """
+
+        print("behavior ===>", behavior)
         from datetime import datetime
         try:
             import pytz

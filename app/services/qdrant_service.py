@@ -27,27 +27,7 @@ class QdrantService:
         self._vector_store = None
 
     async def get_user_qdrant_config(self, user_id: Optional[str] = None) -> Dict[str, str]:
-        """Fetches custom Qdrant credentials for the specified user or current context user."""
-        target_user_id = user_id or current_user_id.get(None)
-        if not target_user_id or self.mongo_db is None:
-            return {
-                "url": self.default_settings.QDRANT_URL,
-                "api_key": self.default_settings.QDRANT_API_KEY,
-                "collection_name": self.default_settings.QDRANT_COLLECTION_NAME
-            }
-
-        try:
-            col = self.mongo_db["user_llm_configs"]
-            user_config = await col.find_one({"user_id": target_user_id})
-            if user_config and user_config.get("qdrant_api_key") and user_config.get("qdrant_collection_name"):
-                return {
-                    "url": user_config.get("qdrant_url") or self.default_settings.QDRANT_URL,
-                    "api_key": user_config.get("qdrant_api_key"),
-                    "collection_name": user_config.get("qdrant_collection_name")
-                }
-        except Exception as err:
-            logger.warning(f"Failed to fetch user qdrant config: {err}")
-
+        """Returns Qdrant credentials from environment settings."""
         return {
             "url": self.default_settings.QDRANT_URL,
             "api_key": self.default_settings.QDRANT_API_KEY,
@@ -55,17 +35,8 @@ class QdrantService:
         }
 
     async def get_client_and_collection(self, user_id: Optional[str] = None):
-        """Returns QdrantClient instance and collection_name for the target user."""
-        cfg = await self.get_user_qdrant_config(user_id=user_id)
-        if cfg["api_key"] == self.default_settings.QDRANT_API_KEY and cfg["url"] == self.default_settings.QDRANT_URL:
-            client = self.default_client
-        else:
-            client = QdrantClient(
-                url=cfg["url"],
-                api_key=cfg["api_key"],
-                timeout=120.0
-            )
-        return client, cfg["collection_name"]
+        """Returns default QdrantClient instance and collection_name from environment settings."""
+        return self.default_client, self.default_collection_name
 
     @property
     def client(self) -> QdrantClient:
@@ -102,18 +73,33 @@ class QdrantService:
                 pass
 
     def create_collection_if_not_exists(self, client: Optional[QdrantClient] = None, collection_name: Optional[str] = None):
-        """Creates the Qdrant collection and payload indexes if they do not already exist."""
+        """Creates the Qdrant collection and payload indexes if they do not already exist or if dimension mismatches."""
         target_client = client or self.default_client
         target_collection = collection_name or self.default_collection_name
         try:
             collections = target_client.get_collections()
-            exists = any(
-                collection.name == target_collection
-                for collection in collections.collections
-            )
-            if not exists:
-                logger.info(f"Creating collection {target_collection} in Qdrant...")
-                vector_size = len(self.embeddings.embed_query("sample text"))
+            collection_info = None
+            for col in collections.collections:
+                if col.name == target_collection:
+                    try:
+                        collection_info = target_client.get_collection(target_collection)
+                    except Exception:
+                        pass
+                    break
+
+            vector_size = len(self.embeddings.embed_query("sample text"))
+
+            if collection_info:
+                current_size = getattr(getattr(collection_info.config, "params", None), "vectors", None)
+                if current_size:
+                    size_val = getattr(current_size, "size", None)
+                    if size_val and size_val != vector_size:
+                        logger.warning(f"Qdrant collection {target_collection} vector dimension mismatch (existing: {size_val}, current model: {vector_size}). Recreating collection...")
+                        target_client.delete_collection(target_collection)
+                        collection_info = None
+
+            if not collection_info:
+                logger.info(f"Creating collection {target_collection} in Qdrant with vector size {vector_size}...")
                 target_client.create_collection(
                     collection_name=target_collection,
                     vectors_config=VectorParams(
@@ -203,6 +189,26 @@ class QdrantService:
             query_filter=query_filter,
             with_payload=True,
         )
+
+        # Fallback 1: If chatbot_id filter returned no results, retry filtering by user_id
+        if not results.points and chatbot_id and target_user:
+            fallback_filter = Filter(must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=target_user))])
+            results = client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=limit,
+                query_filter=fallback_filter,
+                with_payload=True,
+            )
+
+        # Fallback 2: If filtered search still returned 0 points, perform unfiltered search across collection
+        if not results.points and query_filter is not None:
+            results = client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=limit,
+                with_payload=True,
+            )
 
         documents = []
         for result in results.points:

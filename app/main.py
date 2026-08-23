@@ -73,11 +73,12 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.onrender\.com|http://localhost:.*|http://127\.0\.0\.1:.*",
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
+    max_age=600,
 )
 
 # Include routes (mount without prefix so `/message` is available directly at root)
@@ -101,13 +102,19 @@ async def get_widget_js():
     import os
     from fastapi.responses import FileResponse, Response
     
-    widget_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "chatbot-ui", "public", "widget.js")
-    if os.path.exists(widget_path):
-        return FileResponse(
-            widget_path, 
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
-        )
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), "static", "widget.js"),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "chatbot-ui", "public", "widget.js"),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "public", "widget.js"),
+    ]
+    
+    for widget_path in possible_paths:
+        if os.path.exists(widget_path):
+            return FileResponse(
+                widget_path, 
+                media_type="application/javascript",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+            )
     
     return Response(
         content="console.error('widget.js file not found on server.');",
