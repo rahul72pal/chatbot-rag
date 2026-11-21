@@ -6,6 +6,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import httpx
 
+from app.logging_setup import setup_logging
+
+setup_logging()
+
+from app.api import (
+    routes_auth,
+    routes_health,
+    routes_memory,
+    routes_turn,
+    routes_voice_session,
+    ws_voice,
+    routes_pipecat,
+)
 from app.api.routes import api_router
 from app.core.config import settings
 from app.core.logger import logger
@@ -34,12 +47,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     # Create TTL indexes for 24-hour auto-expiration (86400 seconds)
     try:
-        await db.conversations_collection.create_index("created_at", expireAfterSeconds=86400)
-        await db.messages_collection.create_index("created_at", expireAfterSeconds=86400)
-        await db.conversations_collection.create_index("deleted", expireAfterSeconds=86400)
-        await db.messages_collection.create_index("deleted", expireAfterSeconds=86400)
+        import asyncio
+        async with asyncio.timeout(5.0):
+            await db.conversations_collection.create_index("created_at", expireAfterSeconds=86400)
+            await db.messages_collection.create_index("created_at", expireAfterSeconds=86400)
+            await db.conversations_collection.create_index("deleted", expireAfterSeconds=86400)
+            await db.messages_collection.create_index("deleted", expireAfterSeconds=86400)
     except Exception as ttl_err:
         logger.warning(f"TTL index creation note: {ttl_err}")
+
+    from app.db.database import init_db
+    await init_db()
 
     
     yield
@@ -48,6 +66,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await app.state.http_client.aclose()
     # Close MongoDB client
     db.close()
+    from app.db.database import dispose_db
+    await dispose_db()
 
 
 app = FastAPI(
@@ -61,39 +81,35 @@ app = FastAPI(
 # Custom request-response logging middleware
 app.add_middleware(LoggingMiddleware)
 
-# CORS middleware configuration
-origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:3000",
-    "https://chatbot-ui-navy-eight-17.vercel.app",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r".*",
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=".*",
     expose_headers=["*"],
-    max_age=600,
+    max_age=86400,
 )
 
 # Include routes (mount without prefix so `/message` is available directly at root)
 app.include_router(api_router)
 app.include_router(auth_router)
+app.include_router(routes_health.router)
+app.include_router(routes_auth.router, prefix=settings.API_PREFIX)
+app.include_router(routes_voice_session.router, prefix=settings.API_PREFIX)
+app.include_router(routes_turn.router, prefix=settings.API_PREFIX)
+app.include_router(routes_memory.router, prefix=settings.API_PREFIX)
+app.include_router(ws_voice.router)
+app.include_router(ws_voice.router, prefix=settings.API_PREFIX)
+app.include_router(routes_pipecat.router)
+app.include_router(routes_pipecat.router, prefix=settings.API_PREFIX)
 
-
-@app.api_route("/", methods=["GET", "HEAD"], status_code=status.HTTP_200_OK, tags=["System"])
-@app.api_route("/health", methods=["GET", "HEAD"], status_code=status.HTTP_200_OK, tags=["System"])
-async def health_check() -> dict:
-    """Basic root & health check route supporting GET and HEAD for Render cloud deployment."""
-    return {
-        "status": "healthy",
-        "app_name": settings.APP_NAME
-    }
+# Direct /connect aliases for Pipecat client standard templates
+@app.post("/connect", tags=["Pipecat Voice Agent"])
+@app.post("/api/connect", tags=["Pipecat Voice Agent"])
+async def direct_pipecat_connect(payload: routes_pipecat.ConnectRequest):
+    return await routes_pipecat.connect(payload)
 
 
 @app.get("/widget.js", tags=["Widget"])

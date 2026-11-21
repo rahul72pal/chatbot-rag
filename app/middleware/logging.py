@@ -23,7 +23,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             latency = time.perf_counter() - start_time
             logger.info(
                 f"Response: {method} {path} finished with status {response.status_code} "
-                f"in {latency:.4f}s"
+                f"in {latency:.4f}s",
+                extra={"latency_ms": round(latency * 1000, 2)},
             )
             return response
             

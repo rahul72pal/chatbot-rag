@@ -7,9 +7,11 @@ from app.core.dependencies import (
     get_conversation_service,
     get_agent_service,
     get_current_user,
+    get_optional_current_user,
     get_chatbot_service,
     get_user_llm_config_service
 )
+from app.core.config import settings
 from app.core.logger import logger
 from app.schemas.request import MessageRequest
 from app.schemas.response import ChatResponse, TokenUsage
@@ -18,7 +20,7 @@ from app.services.agent_service import AgentService
 from app.services.chatbot_service import ChatbotService
 from app.services.user_llm_config_service import UserLLMConfigService
 from app.utils.helpers import measure_latency
-from app.core.context import current_user_id, current_chatbot_id, current_llm_config
+from app.core.context import current_user_id, current_chatbot_id, current_llm_config, current_search_attempts
 
 router = APIRouter()
 
@@ -31,20 +33,27 @@ router = APIRouter()
 )
 async def post_message(
     payload: MessageRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
     conversation_service: ConversationService = Depends(get_conversation_service),
     agent_service: AgentService = Depends(get_agent_service),
     chatbot_service: ChatbotService = Depends(get_chatbot_service),
     user_llm_config_service: UserLLMConfigService = Depends(get_user_llm_config_service)
 ) -> ChatResponse:
     """Endpoint to interact with the chatbot backend."""
-    user_id = current_user["id"]
+    user_id = current_user["id"] if current_user else None
     
     with measure_latency() as get_duration:
         # 1. Determine conversation and chatbot ID
         if payload.conversation_id is None:
             chatbot_id = payload.chatbot_id
-            if not chatbot_id:
+            if not user_id:
+                if not chatbot_id:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+                chatbot = await chatbot_service.get_public_chatbot(chatbot_id=chatbot_id)
+                if not chatbot:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chatbot not found.")
+                user_id = chatbot.get("user_id", "demo-user")
+            elif not chatbot_id:
                 user_chatbots = await chatbot_service.get_user_chatbots(user_id=user_id)
                 if user_chatbots:
                     chatbot = user_chatbots[0]
@@ -67,6 +76,8 @@ async def post_message(
             else:
                 chatbot = await chatbot_service.get_chatbot(chatbot_id=chatbot_id, user_id=user_id)
                 if not chatbot:
+                    chatbot = await chatbot_service.get_public_chatbot(chatbot_id=chatbot_id)
+                if not chatbot:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail="Chatbot not found or access denied."
@@ -81,12 +92,18 @@ async def post_message(
             conversation_id = payload.conversation_id
             conv = await conversation_service.get_conversation(conversation_id=conversation_id, user_id=user_id)
             if not conv:
+                conv = await conversation_service.get_conversation(conversation_id=conversation_id)
+            if not conv:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Conversation not found or access denied."
                 )
             chatbot_id = conv["chatbot_id"]
+            if not user_id:
+                user_id = conv.get("user_id", "demo-user")
             chatbot = await chatbot_service.get_chatbot(chatbot_id=chatbot_id, user_id=user_id)
+            if not chatbot:
+                chatbot = await chatbot_service.get_public_chatbot(chatbot_id=chatbot_id)
             if not chatbot:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -118,6 +135,11 @@ async def post_message(
             llm_config = await user_llm_config_service.get_raw_user_config_by_user_id(user_id=user_id)
 
         if not llm_config or not llm_config.get("api_key"):
+            public_cfg = settings.public_llm_config()
+            if public_cfg:
+                llm_config = public_cfg
+
+        if not llm_config or not llm_config.get("api_key"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="LLM configuration not found for user. Please configure your API key and model at /llm-config."
@@ -126,6 +148,7 @@ async def post_message(
         current_user_id.set(user_id)
         current_chatbot_id.set(chatbot_id)
         current_llm_config.set(llm_config)
+        current_search_attempts.set(0)
 
         full_history = history
 
@@ -175,17 +198,24 @@ async def post_message(
 )
 async def post_message_stream(
     payload: MessageRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
     conversation_service: ConversationService = Depends(get_conversation_service),
     agent_service: AgentService = Depends(get_agent_service),
     chatbot_service: ChatbotService = Depends(get_chatbot_service),
     user_llm_config_service: UserLLMConfigService = Depends(get_user_llm_config_service)
 ):
-    user_id = current_user["id"]
+    user_id = current_user["id"] if current_user else None
 
     if payload.conversation_id is None:
         chatbot_id = payload.chatbot_id
-        if not chatbot_id:
+        if not user_id:
+            if not chatbot_id:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+            chatbot = await chatbot_service.get_public_chatbot(chatbot_id=chatbot_id)
+            if not chatbot:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chatbot not found.")
+            user_id = chatbot.get("user_id", "demo-user")
+        elif not chatbot_id:
             user_chatbots = await chatbot_service.get_user_chatbots(user_id=user_id)
             if user_chatbots:
                 chatbot = user_chatbots[0]
@@ -208,6 +238,8 @@ async def post_message_stream(
         else:
             chatbot = await chatbot_service.get_chatbot(chatbot_id=chatbot_id, user_id=user_id)
             if not chatbot:
+                chatbot = await chatbot_service.get_public_chatbot(chatbot_id=chatbot_id)
+            if not chatbot:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Chatbot not found or access denied."
@@ -222,12 +254,18 @@ async def post_message_stream(
         conversation_id = payload.conversation_id
         conv = await conversation_service.get_conversation(conversation_id=conversation_id, user_id=user_id)
         if not conv:
+            conv = await conversation_service.get_conversation(conversation_id=conversation_id)
+        if not conv:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Conversation not found or access denied."
             )
         chatbot_id = conv["chatbot_id"]
+        if not user_id:
+            user_id = conv.get("user_id", "demo-user")
         chatbot = await chatbot_service.get_chatbot(chatbot_id=chatbot_id, user_id=user_id)
+        if not chatbot:
+            chatbot = await chatbot_service.get_public_chatbot(chatbot_id=chatbot_id)
         if not chatbot:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -256,6 +294,11 @@ async def post_message_stream(
         llm_config = await user_llm_config_service.get_raw_user_config_by_user_id(user_id=user_id)
 
     if not llm_config or not llm_config.get("api_key"):
+        public_cfg = settings.public_llm_config()
+        if public_cfg:
+            llm_config = public_cfg
+
+    if not llm_config or not llm_config.get("api_key"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="LLM configuration not found for user. Please configure your API key and model at /llm-config."
@@ -264,6 +307,7 @@ async def post_message_stream(
     current_user_id.set(user_id)
     current_chatbot_id.set(chatbot_id)
     current_llm_config.set(llm_config)
+    current_search_attempts.set(0)
 
     full_history = history
 

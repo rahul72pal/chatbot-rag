@@ -1,6 +1,7 @@
 import logging
 import sys
 from typing import Any
+from app.logging_setup import JsonFormatter
 
 def setup_logger(name: str = "chatbot") -> logging.Logger:
     """Sets up a structured console logger for the application."""
@@ -16,12 +17,7 @@ def setup_logger(name: str = "chatbot") -> logging.Logger:
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     
-    # Define a clean, standardized format
-    # Includes timestamp, log level, logger name, file & line, and the message
-    formatter = logging.Formatter(
-        fmt='%(asctime)s [%(levelname)s] [%(name)s] [%(filename)s:%(lineno)d] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    formatter = JsonFormatter()
     console_handler.setFormatter(formatter)
     
     logger.addHandler(console_handler)

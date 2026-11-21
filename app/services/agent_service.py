@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Optional
 import httpx
-import openai
 from pydantic import BaseModel, Field
 from langchain_openrouter import ChatOpenRouter
 from langchain_openai import ChatOpenAI
@@ -8,6 +7,7 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain.agents import create_agent
 from langchain_core.callbacks import AsyncCallbackHandler
@@ -20,8 +20,10 @@ from app.utils.exceptions import (
     DeepSeekTimeoutException,
     RateLimitException,
 )
-from app.utils.tool import web_search, document_search
+from app.utils.tool import web_search, document_search, book_appointment
+from app.tools.preferences import save_preference
 from dataclasses import dataclass, field
+import json
 import re
 from app.services.prompt_service import PromptService
 
@@ -325,7 +327,7 @@ class AgentService:
         self.settings = settings
         self.prompt_service = PromptService()
         self.default_system_prompt = self.prompt_service.get_system_prompt()
-        self.tools = [web_search, document_search]
+        self.tools = [web_search, document_search, save_preference, book_appointment]
 
     @property
     def system_prompt(self) -> str:
@@ -337,7 +339,16 @@ class AgentService:
         llm_async_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=15.0, read=None, write=30.0, pool=30.0)
         )
-        print("LLM Config==>", llm_config)
+        logger.debug(
+            "Resolving user LLM configuration",
+            extra={
+                "config_type": (llm_config or {}).get("config_type", "provider"),
+                "provider": (llm_config or {}).get("provider"),
+                "model": (llm_config or {}).get("voice_agent_model")
+                or (llm_config or {}).get("default_model")
+                or (llm_config or {}).get("model"),
+            },
+        )
 
         if not llm_config or not llm_config.get("api_key"):
             raise DeepSeekAPIException(
@@ -451,6 +462,28 @@ class AgentService:
             debug=False
         )
 
+    @staticmethod
+    def _normalize_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+        """Accept either LangChain or OpenAI tool-call shapes."""
+        if "function" in tool_call:
+            fn = tool_call.get("function") or {}
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            return {
+                "name": fn.get("name") or "",
+                "args": args or {},
+                "id": tool_call.get("id") or "",
+            }
+        return {
+            "name": tool_call.get("name") or "",
+            "args": tool_call.get("args") or {},
+            "id": tool_call.get("id") or "",
+        }
+
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         lc_messages = []
         for msg in messages:
@@ -463,10 +496,23 @@ class AgentService:
             elif role == "system":
                 lc_messages.append(SystemMessage(content=content))
             elif role == "assistant":
+                tool_calls = msg.get("tool_calls") or []
                 kwargs = {}
                 if reasoning_details is not None:
                     kwargs["reasoning_details"] = reasoning_details
-                lc_messages.append(AIMessage(content=content, additional_kwargs=kwargs))
+                if tool_calls:
+                    lc_messages.append(AIMessage(
+                        content=content or "",
+                        tool_calls=[self._normalize_tool_call(call) for call in tool_calls],
+                        additional_kwargs=kwargs,
+                    ))
+                else:
+                    lc_messages.append(AIMessage(content=content, additional_kwargs=kwargs))
+            elif role == "tool":
+                lc_messages.append(ToolMessage(
+                    content=content if isinstance(content, str) else str(content),
+                    tool_call_id=msg.get("tool_call_id") or "",
+                ))
         return lc_messages
 
     async def astream_chat_response(
@@ -511,7 +557,7 @@ class AgentService:
                     if event_name == "web_search":
                         user_status = f"Searching web for '{query_str}'..." if query_str else "Searching web..."
                     elif event_name == "document_search":
-                        user_status = f"Searching knowledge base for '{query_str}'..." if query_str else "Searching knowledge base..."
+                        user_status = f"Searching in uploaded documents for '{query_str}'..." if query_str else "Searching in uploaded documents..."
 
                     yield {
                         "type": "status",

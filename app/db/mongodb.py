@@ -54,4 +54,8 @@ class MongoDB:
     def user_llm_configs_collection(self):
         return self.database["user_llm_configs"]
 
+    @property
+    def appointments_collection(self):
+        return self.database["appointments"]
+
 db = MongoDB()

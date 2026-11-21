@@ -230,6 +230,118 @@ Content-Type: application/json
 
 ---
 
+## Public Voice Agent (Phase 5)
+
+The voice agent is open to any visitor: **no login, no token**. A session is
+created anonymously and its id is the only credential needed for turns.
+
+Speech: **Groq Whisper** for STT (`GROQ_API_KEY`, `STT_MODEL`) and **Gemini** for
+TTS (`GEMINI_API_KEY`, `TTS_MODEL`). The conversational model for anonymous
+visitors is server-owned (`PUBLIC_LLM_*`, falling back to `OPEN_ROUTER_API_KEY`
+then `DEEPSEEK_API_KEY`).
+
+### POST `/api/v1/voice/session`
+
+Creates an anonymous session. Body is optional (`{"language": "en"}`).
+
+```json
+{
+  "session_id": "0d5c9f1e-...",
+  "language": "en",
+  "expires_in_hours": 24
+}
+```
+
+Guest sessions are purged after `PUBLIC_SESSION_TTL_HOURS`. Session creation is
+rate-limited per IP (`PUBLIC_SESSION_MAX_PER_IP_PER_HOUR`).
+
+### POST `/api/v1/voice/turn`
+
+`multipart/form-data` with `audio` (required), `session_id` (required),
+`duration_ms` and `language` (optional). Returns `transcript`, `reply`,
+`audio_b64` (WAV) and `timings_ms`.
+
+### GET / DELETE `/api/v1/voice/session/{session_id}`
+
+Read metadata, or end the session and delete its messages.
+
+### WebSocket `/ws/voice?session_id=...` (Phase 7)
+
+Create a guest session first, then connect with its `session_id`. The socket is
+public and does not require an access token. Send a JSON config message such as
+`{"type":"config","language":"en"}`, followed by binary mono PCM16 audio
+frames at 16 kHz (20 ms frames are 640 bytes). The server uses WebRTC VAD to
+detect speech boundaries, transcribes completed utterances with Groq, runs the
+configured public LLM, and sends Gemini TTS audio as binary PCM16 chunks at
+24 kHz. On `interrupt`, the client should stop and clear its playback queue.
+
+To exercise the socket without a frontend, use a 16 kHz mono PCM16 WAV:
+
+```powershell
+python scripts/voice_ws_client.py sample_16k_mono.wav
+```
+
+For a barge-in attempt, supply a second speech WAV that the client sends while
+the first reply is being spoken:
+
+```powershell
+python scripts/voice_ws_client.py first.wav --barge-in-wav second.wav
+```
+
+### Natural speech chunking and echo handling
+
+- `app/core/chunker.py` splits text for TTS on **sentences**, never on bare word
+  counts. A sentence is released as soon as it is complete, so short answers
+  start immediately; only a sentence longer than `LONG_SENTENCE_WORDS` (18) or
+  `LONG_SENTENCE_CHARS` (200) is released earlier, and then at its last clause
+  (comma/semicolon/dash) so the prosody still sounds continuous.
+- Complete texts (greeting, non-streamed fallback) go through `speech_chunks`,
+  which groups whole sentences into one TTS request up to the same 200-char
+  budget - fewer requests, smoother delivery.
+- **Agent state comes from the backend.** The socket emits
+  `{"type":"state","state":"listening|thinking|speaking|idle"}`:
+  `listening` only once VAD confirms real speech, `thinking` while the
+  transcript/LLM is being produced, `speaking` on the first TTS frame and
+  `idle` after `turn_end`. Clients render this state and never infer it
+  themselves.
+- **Barge-in:** VAD reports `barge_in` as soon as the user speaks above the
+  barge-in energy floor while the agent talks; the server cancels the current
+  turn, sends `interrupt` and returns to `listening`. Playback audio is
+  regained with `unduck_audio`.
+- Self-echo guard (three layers):
+  1. **Speaker state from the client.** The browser sends
+     `{"type":"playback","state":"start"|"end"}` when its audio queue starts and
+     drains. The server counts the agent as speaking until the client says the
+     speaker is silent, so buffered audio that plays *after* the last byte was
+     sent can never be mistaken for the user.
+  2. **Echo gate.** While the speaker is on, the VAD energy floor is derived
+     from the RMS of the PCM actually being sent (`max(400, playback_rms*0.35)`),
+     so speaker bleed is ignored while normal speech still barges in.
+  3. **Transcript check.** A short utterance (<= 0.35 s after playback) whose
+     words are >= 80% contained in the last assistant sentences is dropped as
+     echo. Pure fillers (`hmm`, `uh`) are ignored while the agent speaks, but
+     confirmations (`yes`, `okay`, `sure`) are always treated as real answers.
+  Genuine speech still barges in, and playback volume is restored on `turn_end`.
+- The browser asks for `echoCancellation`, `noiseSuppression` and
+  `autoGainControl`, holds back mic frames during the first moment of playback,
+  and reconnects the socket (3 attempts, then a fresh guest session on 4408).
+
+### Tool safety (the model proposes, the backend decides)
+
+- `app/tools/registry.py` validates every call argument with a Pydantic model,
+  applies an idempotency key (`session + tool + args`) for mutating tools, and
+  enforces `TOOL_TIMEOUT_S`.
+- `app/tools/booking.py` implements `check_availability` and `create_booking`.
+  `create_booking` **refuses** unless a matching, fresh, single-use proposal was
+  recorded for the session and the user confirmed it. A booking reference is
+  only ever returned by the tool, never by the model.
+- `app/core/orchestrator.py` runs at most `MAX_TOOL_ITERATIONS` tool rounds and
+  falls back to an apology instead of looping.
+- Anonymous visitors only get the booking tools; knowledge-base search, web
+  search and preference memory require an authenticated owner.
+
+---
+
 ## Testing
 
 The project uses `pytest` and `pytest-asyncio` to execute unit and integration tests. The test suite mocks DeepSeek API responses to facilitate fully offline testing.
@@ -247,6 +359,10 @@ This runs:
 - DeepSeek service integration mocks.
 - Latency and retry triggers.
 - Global exception mapping validations.
+- Tool registry: argument validation, timeouts, idempotent mutating calls.
+- Booking flow: confirmation gate, duplicate booking reuse, slot conflicts.
+- Orchestrator: tool feedback, unknown tools, iteration cap, fallback reply.
+- Public sessions: anonymous creation, owner-only tool scoping, TTL purge.
 
 ---
 

@@ -8,6 +8,7 @@ class UserLLMConfigCreate(BaseModel):
     # Provider-specific fields
     provider: Optional[str] = Field(default=None, description="Built-in provider name: 'openai', 'anthropic', or 'gemini'")
     default_model: Optional[str] = Field(default=None, description="Default model for built-in provider")
+    voice_agent_model: Optional[str] = Field(default=None, description="Model used by the voice agent")
     
     # Custom endpoint fields
     name: Optional[str] = Field(default=None, description="Custom identifier name (e.g. 'OpenRouter')")
@@ -47,6 +48,7 @@ class UserLLMConfigUpdate(BaseModel):
     config_type: Optional[str] = Field(default=None)
     provider: Optional[str] = Field(default=None)
     default_model: Optional[str] = Field(default=None)
+    voice_agent_model: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
     base_url: Optional[str] = Field(default=None)
     model: Optional[str] = Field(default=None)
@@ -67,6 +69,7 @@ class UserLLMConfigResponse(BaseModel):
     
     provider: Optional[str] = Field(default=None)
     default_model: Optional[str] = Field(default=None)
+    voice_agent_model: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
     base_url: Optional[str] = Field(default=None)
     model: Optional[str] = Field(default=None)
