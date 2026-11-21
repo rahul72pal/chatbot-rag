@@ -138,3 +138,10 @@ venv/
 .env
 __pycache__/
 *.pyc
+voice_agent.db
+voice_agent.db-*
+
+# Google Cloud credentials
+*.json
+!package.json
+!package-lock.json

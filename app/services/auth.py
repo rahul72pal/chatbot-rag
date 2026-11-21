@@ -89,6 +89,10 @@ async def delete_user(user_id: str) -> bool:
     from app.services.user_llm_config_service import UserLLMConfigService
     config_service = UserLLMConfigService(db.database)
     await config_service.delete_user_configs(user_id)
+
+    # Remove voice transcripts, sessions, and saved preferences from SQL storage too.
+    from app.db.database import delete_voice_user
+    await delete_voice_user(user_id)
     
     # 4. Delete user document
     result = await db.users_collection.delete_one({"_id": ObjectId(user_id)})
