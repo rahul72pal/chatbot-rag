@@ -5,11 +5,13 @@ from app.schemas.user import (
     LoginRequest,
     UserResponse,
     TokenResponse,
+    RefreshTokenRequest,
 )
 
 from app.services.auth import (
     signup,
     login,
+    refresh_tokens,
 )
 
 
@@ -62,6 +64,30 @@ async def delete_current_user_account(current_user: dict = Depends(get_current_u
             detail="User not found or deletion failed."
         )
     return
+
+
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="Refresh access token",
+    description="Exchanges a valid refresh token for a new access token and a rotated refresh token."
+)
+async def refresh_token(data: RefreshTokenRequest):
+
+    try:
+
+        token = await refresh_tokens(
+            refresh_token=data.refresh_token,
+        )
+
+        return token
+
+    except ValueError as error:
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(error),
+        )
 
 
 @router.post(
