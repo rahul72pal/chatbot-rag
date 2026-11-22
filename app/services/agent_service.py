@@ -20,7 +20,7 @@ from app.utils.exceptions import (
     DeepSeekTimeoutException,
     RateLimitException,
 )
-from app.utils.tool import web_search, document_search, book_appointment
+from app.utils.tool import web_search, document_search, book_appointment, check_appointment
 from app.tools.preferences import save_preference
 from dataclasses import dataclass, field
 import json
@@ -327,7 +327,7 @@ class AgentService:
         self.settings = settings
         self.prompt_service = PromptService()
         self.default_system_prompt = self.prompt_service.get_system_prompt()
-        self.tools = [web_search, document_search, save_preference, book_appointment]
+        self.tools = [web_search, document_search, save_preference, book_appointment, check_appointment]
 
     @property
     def system_prompt(self) -> str:

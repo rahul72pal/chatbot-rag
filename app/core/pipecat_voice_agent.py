@@ -126,6 +126,11 @@ VOICE_CALL_RULES = (
     "Do you confirm that you would like me to go ahead and book this appointment?'\n"
     "  4. Tool Execution: You are strictly forbidden from saving or booking until the user gives explicit verbal confirmation (e.g. 'yes', 'confirm', 'book it'). Call book_appointment with confirmed=True ONLY after verbal confirmation.\n"
     "- If an appointment already exists for the email, politely let the user know their query is already recorded on file.\n"
+    "- APPOINTMENT LOOKUP WORKFLOW:\n"
+    "  When a user asks to check, look up, or verify an existing appointment/consultation, or asks when their meeting is scheduled:\n"
+    "  1. Ask for their email address if not already provided.\n"
+    "  2. Call the `check_appointment` tool with their email address.\n"
+    "  3. Read back the appointment status, scheduled date/time, and details warmly and conversationally.\n"
     "- If the user explicitly says goodbye, asks to hang up, or finishes the conversation, give a polite, brief farewell "
     "(e.g. 'Goodbye! Have a great day!' or in Hindi 'अलविदा! आपका दिन शुभ हो!') and append '[END_CALL]' at the end of your message.\n"
     "- CRITICAL: NEVER say goodbye or append '[END_CALL]' if the user is asking questions or continuing the conversation. "
@@ -753,7 +758,7 @@ class PipecatVoiceAgent:
         import httpx
         from app.services.agent_service import AgentService
         from app.services.prompt_service import PromptService
-        from app.utils.tool import web_search, document_search, current_datetime, book_appointment
+        from app.utils.tool import web_search, document_search, current_datetime, book_appointment, check_appointment
         from app.tools.preferences import save_preference
         from langchain.agents import create_agent
         from langgraph.checkpoint.memory import InMemorySaver
@@ -774,7 +779,7 @@ class PipecatVoiceAgent:
                 f"{base_voice_prompt}\n\n## Conversation Summary (Older turns):\n{summary.strip()[:4000]}"
             )
 
-        voice_tools = [current_datetime, document_search, web_search, save_preference, book_appointment]
+        voice_tools = [current_datetime, document_search, web_search, save_preference, book_appointment, check_appointment]
 
         voice_agent = create_agent(
             model=voice_model,
@@ -1068,7 +1073,11 @@ class PipecatVoiceAgent:
                                     else (
                                         "Processing appointment booking..."
                                         if tool_name == "book_appointment"
-                                        else f"Searching with {tool_name}..."
+                                        else (
+                                            "Checking appointment records..."
+                                            if tool_name == "check_appointment"
+                                            else f"Searching with {tool_name}..."
+                                        )
                                     )
                                 )
                             )

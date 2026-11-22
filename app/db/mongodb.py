@@ -21,7 +21,7 @@ class MongoDB:
                             mongo_url = f"{scheme}://{safe_username}:{safe_password}@{host}"
                 except Exception:
                     pass
-            self.client = AsyncIOMotorClient(mongo_url)
+            self.client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000)
 
     def close(self):
         if self.client is not None:

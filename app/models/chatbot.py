@@ -25,6 +25,12 @@ class Chatbot(BaseModel):
     pop_after_seconds: int = 3
     show_welcome_tooltip: bool = False
     welcome_message: str = "Hi! How can I help you today?"
+    show_floating_prompts: bool = True
+    suggested_prompts: Optional[list] = Field(default_factory=lambda: [
+        "What services do you offer?",
+        "How do I check my appointment?",
+        "Can I speak to support?"
+    ])
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
