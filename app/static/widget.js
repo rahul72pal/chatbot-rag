@@ -57,7 +57,13 @@
         bubble_style: 'rounded',
         open_automatically: false,
         pop_after_seconds: 3,
-        show_welcome_tooltip: true
+        show_welcome_tooltip: true,
+        show_floating_prompts: true,
+        suggested_prompts: [
+          'What services do you offer?',
+          'How do I check my appointment?',
+          'Can I speak with support?'
+        ]
       }
     };
   }
@@ -288,7 +294,8 @@
       // Text Chat View
       '<div id="ycb-chat-view" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">' +
         '<div id="ycb-messages" style="flex: 1; padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; background-color: #080E1B;"></div>' +
-        '<div style="padding: 10px 12px 6px 12px; background: #091121; border-top: 1px solid #1C2C4B; flex-shrink: 0;">' +
+        '<div style="padding: 8px 12px 6px 12px; background: #091121; border-top: 1px solid #1C2C4B; flex-shrink: 0; position: relative;">' +
+          '<div id="ycb-floating-prompts" style="display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none;"></div>' +
           '<form id="ycb-form" style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">' +
             '<input id="ycb-input" type="text" placeholder="Type a message or tap mic..." style="flex: 1; border: 1px solid #1C2C4B; border-radius: 10px; padding: 9px 12px; font-size: 13px; outline: none; background: #101D39; color: #F3F6FF;" />' +
             '<button type="button" id="ycb-mic-trigger" style="width: 36px; height: 36px; border-radius: 10px; background: #142342; border: 1px solid #243653; color: #22D3EE; cursor: pointer; display: flex; align-items: center; justify-content: center;" title="Voice Mode">' +
@@ -444,6 +451,41 @@
       }
       if (voiceEndBtn) {
         voiceEndBtn.addEventListener('click', endVoiceCall);
+      }
+
+      var floatingPromptsEl = document.getElementById('ycb-floating-prompts');
+      if (floatingPromptsEl) {
+        floatingPromptsEl.innerHTML = '';
+        if (config.show_floating_prompts !== false && config.suggested_prompts && config.suggested_prompts.length > 0) {
+          floatingPromptsEl.style.display = 'flex';
+          config.suggested_prompts.forEach(function (promptText) {
+            if (!promptText || !promptText.trim()) return;
+            var chip = document.createElement('button');
+            chip.type = 'button';
+            chip.textContent = promptText;
+            chip.title = 'Click to send: ' + promptText;
+            chip.style.cssText = 'flex-shrink: 0; background: #142342; color: #E0E7FF; border: 1px solid #243653; border-radius: 9999px; padding: 4px 10px; font-size: 11px; font-weight: 500; cursor: pointer; white-space: nowrap; transition: all 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.3); outline: none;';
+            chip.addEventListener('mouseenter', function () {
+              chip.style.background = '#1e325c';
+              chip.style.borderColor = '#4F46E5';
+              chip.style.transform = 'translateY(-1px)';
+            });
+            chip.addEventListener('mouseleave', function () {
+              chip.style.background = '#142342';
+              chip.style.borderColor = '#243653';
+              chip.style.transform = 'translateY(0)';
+            });
+            chip.addEventListener('click', function () {
+              if (inputEl) {
+                inputEl.value = promptText;
+                formEl.dispatchEvent(new Event('submit', { cancelable: true }));
+              }
+            });
+            floatingPromptsEl.appendChild(chip);
+          });
+        } else {
+          floatingPromptsEl.style.display = 'none';
+        }
       }
 
       if (config.open_automatically) {
@@ -1388,6 +1430,10 @@
           config.open_automatically = data.open_automatically !== undefined ? data.open_automatically : config.open_automatically;
           config.pop_after_seconds = data.pop_after_seconds || config.pop_after_seconds;
           config.show_welcome_tooltip = data.show_welcome_tooltip !== undefined ? data.show_welcome_tooltip : config.show_welcome_tooltip;
+          config.show_floating_prompts = data.show_floating_prompts !== undefined ? data.show_floating_prompts : config.show_floating_prompts;
+          if (Array.isArray(data.suggested_prompts)) {
+            config.suggested_prompts = data.suggested_prompts;
+          }
         }
         renderUI();
       })

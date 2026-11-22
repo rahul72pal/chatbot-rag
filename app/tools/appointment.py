@@ -158,3 +158,78 @@ async def book_appointment(
         f"and our team will reach out to them at {phone_clean} or {email_clean}."
     )
 
+
+@tool
+async def check_appointment(
+    email: str,
+    chatbot_id: Optional[str] = None,
+) -> str:
+    """Check the status and scheduled details of an existing appointment or consultation booking using the user's email address.
+
+    Use this tool whenever a user asks:
+    - 'Can you check my appointment?'
+    - 'What is the status of my appointment?'
+    - 'Did I book an appointment?'
+    - 'When is my meeting scheduled?'
+    - 'Check my consultation for user@example.com'
+    - Or provides their email to verify or retrieve their booking status.
+
+    Args:
+        email: The user's email address (e.g. 'john@example.com' or spoken format 'john dot doe at gmail dot com').
+        chatbot_id: Optional chatbot ID context.
+    """
+    from app.core.voice_entity_flow import normalize_spoken_email
+    from app.services.appointment_service import AppointmentService
+
+    email_clean = normalize_spoken_email(email or "")
+    if not email_clean or "@" not in email_clean or "." not in email_clean:
+        return (
+            "INVALID_EMAIL: The email address provided could not be recognized. "
+            "Please ask the user to provide their valid email address so I can check their appointment records."
+        )
+
+    cid = chatbot_id or current_chatbot_id.get(None) or "default"
+    try:
+        mongo_db = db.database if db.client is not None else None
+    except Exception:
+        mongo_db = None
+    service = AppointmentService(mongo_db=mongo_db)
+
+    logger.info(f"[Check Appointment] Looking up appointment for email '{email_clean}' under chatbot '{cid}'")
+    records = await service.get_appointments_by_email(email=email_clean, chatbot_id=cid)
+
+    # If no records found under the specific chatbot ID, check across all records as fallback
+    if not records and cid != "default":
+        records = await service.get_appointments_by_email(email=email_clean, chatbot_id=None)
+
+    if not records:
+        return (
+            f"NO_APPOINTMENT_FOUND: No appointment or consultation query was found for email '{email_clean}'.\n"
+            f"Please inform the user politely that there is no scheduled appointment currently on file for '{email_clean}'. "
+            f"Ask if they would like you to help them schedule or book a new appointment now."
+        )
+
+    # Most recent appointment
+    appt = records[0]
+    status_label = str(appt.get("status", "pending")).capitalize()
+    time_str = appt.get("time", "To be determined")
+    reason = appt.get("reason", "General Consultation")
+    name = appt.get("name", "Client")
+    phone = appt.get("contact_number", "Not provided")
+    appt_id = appt.get("id", "N/A")
+
+    return (
+        f"APPOINTMENT_FOUND: An appointment record was found for '{email_clean}'!\n"
+        f"- Reference ID: {appt_id}\n"
+        f"- Client Name: {name}\n"
+        f"- Email: {email_clean}\n"
+        f"- Contact Phone: {phone}\n"
+        f"- Scheduled Date & Time: {time_str}\n"
+        f"- Purpose / Topic: {reason}\n"
+        f"- Current Status: {status_label}\n\n"
+        f"Please explain these details warmly and naturally to the user. "
+        f"Let them know their appointment status is currently '{status_label}' for '{time_str}', and "
+        f"confirm if there is anything else they need assistance with."
+    )
+
+

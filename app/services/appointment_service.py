@@ -6,6 +6,7 @@ Enforces the single-query-per-email rule for each chatbot.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -32,12 +33,18 @@ class AppointmentService:
         norm_email = email.strip().lower()
         # 1. Check MongoDB first if available
         if self._collection is not None:
-            existing = await self._collection.find_one({
-                "chatbot_id": chatbot_id,
-                "email": norm_email,
-            })
-            if existing:
-                return True
+            try:
+                existing = await asyncio.wait_for(
+                    self._collection.find_one({
+                        "chatbot_id": chatbot_id,
+                        "email": norm_email,
+                    }),
+                    timeout=2.0
+                )
+                if existing:
+                    return True
+            except Exception as mongo_err:
+                logger.debug(f"[AppointmentService] MongoDB check_email_exists note: {mongo_err}")
 
         # 2. Check SQLite appointments table
         try:
@@ -102,9 +109,9 @@ class AppointmentService:
         # 1. Insert into MongoDB
         if self._collection is not None:
             try:
-                await self._collection.insert_one(record)
+                await asyncio.wait_for(self._collection.insert_one(record), timeout=2.0)
             except Exception as mongo_err:
-                logger.error(f"[AppointmentService] MongoDB insert failed: {mongo_err}")
+                logger.debug(f"[AppointmentService] MongoDB insert note: {mongo_err}")
 
         # 2. Insert into SQLite table 'appointments'
         try:
@@ -135,6 +142,77 @@ class AppointmentService:
             f"for '{name}' ({norm_email}) under chatbot '{chatbot_id}'."
         )
         return {"ok": True, "exists": False, "appointment": clean_record}
+
+    async def get_appointments_by_email(
+        self,
+        email: str,
+        chatbot_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve appointment queries for a given email address.
+
+        Checks both MongoDB and the SQLite 'appointments' table.
+        If chatbot_id is provided, filters by that chatbot; otherwise returns all appointments matching the email.
+        """
+        norm_email = email.strip().lower()
+        records: List[Dict[str, Any]] = []
+        seen_ids = set()
+
+        # 1. Query MongoDB if available
+        if self._collection is not None:
+            try:
+                query: Dict[str, Any] = {"email": norm_email}
+                if chatbot_id and chatbot_id != "default":
+                    query["chatbot_id"] = chatbot_id
+                
+                async def _fetch_mongo():
+                    docs = []
+                    cursor = self._collection.find(query).sort("created_at", -1).limit(10)
+                    async for doc in cursor:
+                        docs.append(doc)
+                    return docs
+
+                mongo_docs = await asyncio.wait_for(_fetch_mongo(), timeout=2.0)
+                for doc in mongo_docs:
+                    appt_id = str(doc.get("id") or doc.get("_id", ""))
+                    if appt_id not in seen_ids:
+                        seen_ids.add(appt_id)
+                        doc["id"] = appt_id
+                        doc.pop("_id", None)
+                        if isinstance(doc.get("created_at"), datetime):
+                            doc["created_at"] = doc["created_at"].isoformat()
+                        if isinstance(doc.get("updated_at"), datetime):
+                            doc["updated_at"] = doc["updated_at"].isoformat()
+                        records.append(doc)
+            except Exception as mongo_err:
+                logger.debug(f"[AppointmentService] MongoDB get_appointments_by_email note: {mongo_err}")
+
+        # 2. Query SQLite 'appointments' table
+        try:
+            async with SessionLocal() as db_session:
+                stmt = select(Appointment).where(func.lower(Appointment.email) == norm_email)
+                if chatbot_id and chatbot_id != "default":
+                    stmt = stmt.where(Appointment.chatbot_id == chatbot_id)
+                stmt = stmt.order_by(Appointment.created_at.desc())
+                results = (await db_session.scalars(stmt)).all()
+                for appt in results:
+                    if appt.id not in seen_ids:
+                        seen_ids.add(appt.id)
+                        records.append({
+                            "id": appt.id,
+                            "chatbot_id": appt.chatbot_id,
+                            "name": appt.name,
+                            "email": appt.email,
+                            "contact_number": appt.contact_number,
+                            "time": appt.time,
+                            "reason": appt.reason,
+                            "status": appt.status,
+                            "created_at": appt.created_at.isoformat() if appt.created_at else None,
+                            "updated_at": appt.updated_at.isoformat() if appt.updated_at else None,
+                        })
+        except Exception as sql_err:
+            logger.error(f"[AppointmentService] SQLite get_appointments_by_email error: {sql_err}")
+
+        return records
 
     async def list_appointments(
         self,

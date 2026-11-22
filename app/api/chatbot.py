@@ -162,6 +162,12 @@ async def get_public_chatbot(
             open_automatically=False,
             pop_after_seconds=3,
             show_welcome_tooltip=True,
+            show_floating_prompts=True,
+            suggested_prompts=[
+                "What services do you offer?",
+                "How do I check my appointment?",
+                "Can I speak to support?"
+            ],
             created_at=datetime.utcnow()
         )
     return chatbot

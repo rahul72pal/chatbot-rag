@@ -118,6 +118,6 @@ websockets>=13.0
 xxhash==3.8.1
 yarl>=1.9.0
 zstandard==0.25.0
-pipecat-ai[daily,openai,deepgram,elevenlabs,silero]
+pipecat-ai[daily,openai,deepgram,elevenlabs,silero]>=0.0.50
 loguru>=0.7.2
 Pillow>=10.0.0

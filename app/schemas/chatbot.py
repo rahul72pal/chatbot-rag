@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class ChatbotCreate(BaseModel):
@@ -19,6 +19,8 @@ class ChatbotCreate(BaseModel):
     pop_after_seconds: Optional[int] = 3
     show_welcome_tooltip: Optional[bool] = False
     welcome_message: Optional[str] = Field("Hi! How can I help you today?", max_length=1000)
+    show_floating_prompts: Optional[bool] = True
+    suggested_prompts: Optional[List[str]] = Field(default_factory=list)
 
 class ChatbotUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
@@ -37,6 +39,8 @@ class ChatbotUpdate(BaseModel):
     pop_after_seconds: Optional[int] = None
     show_welcome_tooltip: Optional[bool] = None
     welcome_message: Optional[str] = Field(None, max_length=1000)
+    show_floating_prompts: Optional[bool] = None
+    suggested_prompts: Optional[List[str]] = None
 
 class ChatbotResponse(BaseModel):
     id: str
@@ -57,6 +61,8 @@ class ChatbotResponse(BaseModel):
     pop_after_seconds: Optional[int] = 3
     show_welcome_tooltip: Optional[bool] = False
     welcome_message: Optional[str] = "Hi! How can I help you today?"
+    show_floating_prompts: Optional[bool] = True
+    suggested_prompts: Optional[List[str]] = Field(default_factory=list)
     conversations_count: Optional[int] = 0
     messages_count: Optional[int] = 0
     created_at: datetime

@@ -255,8 +255,8 @@ def current_datetime() -> str:
     )
 
 
-# Re-export appointment tool
-from app.tools.appointment import book_appointment
+# Re-export appointment tools
+from app.tools.appointment import book_appointment, check_appointment
 
-__all__ = ["web_search", "document_search", "current_datetime", "book_appointment", "reset_search_counter"]
+__all__ = ["web_search", "document_search", "current_datetime", "book_appointment", "check_appointment", "reset_search_counter"]
 
