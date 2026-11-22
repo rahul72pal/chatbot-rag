@@ -5,6 +5,8 @@ from app.core.security import (
     hash_password,
     verify_password,
     create_access_token,
+    create_refresh_token,
+    decode_token,
 )
 
 
@@ -62,8 +64,41 @@ async def login(
         str(user["_id"])
     )
 
+    refresh_token = create_refresh_token(
+        str(user["_id"])
+    )
+
     return {
         "access_token": token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
+
+
+async def refresh_tokens(refresh_token: str):
+    """Validate a refresh token and issue a new access + refresh token pair.
+
+    The refresh token is rotated on every use so a stolen token has a short window.
+    """
+    try:
+        payload = decode_token(refresh_token)
+    except Exception:
+        raise ValueError("Invalid or expired refresh token")
+
+    if payload.get("type") != "refresh":
+        raise ValueError("Invalid token type")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise ValueError("Invalid refresh token: missing user ID")
+
+    user = await db.users_collection.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise ValueError("User not found")
+
+    return {
+        "access_token": create_access_token(user_id),
+        "refresh_token": create_refresh_token(user_id),
         "token_type": "bearer",
     }
 

@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr
 
+
 class SignupRequest(BaseModel):
     name: str
     email: EmailStr
@@ -10,14 +11,18 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 class UserResponse(BaseModel):
     id: str
     name: str
-    email: EmailStr
+    email: str
 
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
-
-    

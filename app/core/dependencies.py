@@ -108,6 +108,12 @@ async def get_current_user(
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM]
         )
+        if payload.get("type") == "refresh":
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh tokens cannot be used to access the API."
+            )
         user_id = payload.get("sub")
         if not user_id:
             from fastapi import HTTPException, status
