@@ -50,9 +50,19 @@ def _build_tts(config: Settings) -> TTS:
 tts: TTS = _build_tts(settings)
 
 
+def create_stt(config: Settings = settings) -> STT:
+    """Create a fresh STT provider instance (e.g. per voice session)."""
+    return _build_stt(config)
+
+
+def create_tts(config: Settings = settings) -> TTS:
+    """Create a fresh TTS provider instance (e.g. per voice session)."""
+    return _build_tts(config)
+
+
 def create_llm(agent_service: Any, user_config: dict[str, Any]) -> LLM:
     """Build an LLM adapter from a resolved user LLM config document."""
     return UserConfigLLM(agent_service, user_config)
 
 
-__all__ = ["LLM", "Message", "STT", "TTS", "Tool", "stt", "tts", "create_llm"]
+__all__ = ["LLM", "Message", "STT", "TTS", "Tool", "stt", "tts", "create_stt", "create_tts", "create_llm"]

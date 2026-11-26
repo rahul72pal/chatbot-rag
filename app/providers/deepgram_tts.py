@@ -29,15 +29,23 @@ class DeepgramTTS:
             self._client = httpx.AsyncClient(
                 http2=False,
                 timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
-                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=30.0),
             )
         return self._client
+
+    async def aclose(self) -> None:
+        """Close the persistent connection pool cleanly."""
+        if self._client is not None and not self._client.is_closed:
+            try:
+                await self._client.aclose()
+            except Exception:
+                pass
+            self._client = None
 
     def _headers(self):
         return {
             "Authorization": f"Token {self._api_key}",
             "Content-Type": "application/json",
-            "Connection": "close",
         }
 
     def _params(self):
@@ -90,21 +98,11 @@ class DeepgramTTS:
 
         except httpx.TimeoutException:
             logger.exception("[Deepgram TTS] Request timed out")
-            if self._client:
-                try:
-                    await self._client.aclose()
-                except Exception:
-                    pass
-                self._client = None
+            await self.aclose()
 
         except Exception:
             logger.exception("[Deepgram TTS] Streaming failed")
-            if self._client:
-                try:
-                    await self._client.aclose()
-                except Exception:
-                    pass
-                self._client = None
+            await self.aclose()
 
     async def synthesize(self, text: str, language: str = "en") -> bytes:
 

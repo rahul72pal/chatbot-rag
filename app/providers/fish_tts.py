@@ -46,7 +46,7 @@ class FishTTS:
             self._client = httpx.AsyncClient(
                 http2=False,
                 timeout=httpx.Timeout(connect=5.0, read=30.0, write=15.0, pool=5.0),
-                limits=httpx.Limits(max_keepalive_connections=0, max_connections=20),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=30.0),
             )
         return self._client
 
@@ -63,7 +63,6 @@ class FishTTS:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "model": self.model,
-            "Connection": "close",
         }
 
     def _payload(self, text: str) -> dict[str, Any]:
