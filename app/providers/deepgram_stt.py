@@ -29,12 +29,12 @@ class DeepgramSTT:
         self._client: httpx.AsyncClient | None = client
 
     def _get_client(self) -> httpx.AsyncClient:
-        """Create an HTTP client configured for clean, reliable audio uploads without stale socket reuse."""
+        """Reuse a warm, persistent HTTP client with connection pooling to eliminate TLS handshake latency."""
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 http2=False,
                 timeout=httpx.Timeout(connect=5.0, read=25.0, write=25.0, pool=5.0),
-                limits=httpx.Limits(max_keepalive_connections=0, max_connections=20),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=30.0),
             )
         return self._client
 
@@ -80,7 +80,6 @@ class DeepgramSTT:
             "Authorization": f"Token {self._api_key}",
             "Content-Type": normalized_mime,
             "Content-Length": str(len(audio)),
-            "Connection": "close",
         }
 
         resp_data = None

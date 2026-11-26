@@ -477,6 +477,7 @@ class PipecatVoiceAgent:
         chatbot_id: Optional[str] = None,
         user_id: Optional[str] = None,
         language: str = "en",
+        http_client: Optional[Any] = None,
     ):
         self.transport = transport
         self.runner_args = runner_args or (RunnerArguments() if PIPECAT_AVAILABLE else None)
@@ -491,6 +492,16 @@ class PipecatVoiceAgent:
         self.chatbot_id = chatbot_id
         self.user_id = user_id
         self.language = language or "en"
+        self._http_client = http_client
+        self._owns_http_client = False
+        self._cached_voice_agent: Optional[Any] = None
+        self._cached_voice_prompt: Optional[str] = None
+        self._cached_summary: Optional[str] = None
+        self._cached_prior_messages: Optional[List[Any]] = None
+        self._cached_session_summary: Optional[str] = None
+        self._history_loaded: bool = False
+        self._session_stt: Optional[Any] = None
+        self._session_tts: Optional[Any] = None
 
         self.context: Optional[LLMContext] = None
         self.pipeline: Optional[Pipeline] = None
@@ -753,8 +764,26 @@ class PipecatVoiceAgent:
 
         await self.runner.run()
 
+    def _get_stt(self) -> Any:
+        """Return a per-session STT adapter so hangup cleanup never affects other callers."""
+        if self._session_stt is None:
+            from app.providers import create_stt
+            self._session_stt = create_stt()
+        return self._session_stt
+
+    def _get_tts(self) -> Any:
+        """Return a per-session TTS adapter so hangup cleanup never affects other callers."""
+        if self._session_tts is None:
+            from app.providers import create_tts
+            self._session_tts = create_tts()
+        return self._session_tts
+
     def build_langchain_agent(self, thread_id: str, summary: Optional[str] = None):
-        """Construct the tool-augmented LangChain agent with full system prompt & voice rules."""
+        """Construct or reuse the cached tool-augmented LangChain agent for this session."""
+        summary_key = summary.strip() if summary and summary.strip() else ""
+        if self._cached_voice_agent is not None and self._cached_summary == summary_key:
+            return self._cached_voice_agent, self._cached_voice_prompt
+
         import httpx
         from app.services.agent_service import AgentService
         from app.services.prompt_service import PromptService
@@ -764,8 +793,12 @@ class PipecatVoiceAgent:
         from langgraph.checkpoint.memory import InMemorySaver
         from app.core.config import settings
 
+        if self._http_client is None or getattr(self._http_client, "is_closed", False):
+            self._http_client = httpx.AsyncClient(timeout=30.0)
+            self._owns_http_client = True
+
         cfg = self.user_config or settings.public_llm_config()
-        agent_svc = AgentService(client=httpx.AsyncClient(timeout=30.0), settings=settings)
+        agent_svc = AgentService(client=self._http_client, settings=settings)
         voice_model = agent_svc._get_llm_model(cfg)
 
         custom_behavior = (
@@ -774,9 +807,9 @@ class PipecatVoiceAgent:
         prompt_service = getattr(agent_svc, "prompt_service", None) or PromptService()
         base_voice_prompt = prompt_service.get_voice_system_prompt(behavior=custom_behavior)
 
-        if summary and summary.strip():
+        if summary_key:
             base_voice_prompt = (
-                f"{base_voice_prompt}\n\n## Conversation Summary (Older turns):\n{summary.strip()[:4000]}"
+                f"{base_voice_prompt}\n\n## Conversation Summary (Older turns):\n{summary_key[:4000]}"
             )
 
         voice_tools = [current_datetime, document_search, web_search, save_preference, book_appointment, check_appointment]
@@ -787,7 +820,52 @@ class PipecatVoiceAgent:
             system_prompt=base_voice_prompt,
             checkpointer=InMemorySaver(),
         )
+        self._cached_voice_agent = voice_agent
+        self._cached_voice_prompt = base_voice_prompt
+        self._cached_summary = summary_key
         return voice_agent, base_voice_prompt
+
+    async def _load_session_history(self, s_id: str) -> tuple[List[Any], Optional[str]]:
+        """Load session summary and prior messages once per session, then serve from memory."""
+        if self._history_loaded and self._cached_prior_messages is not None:
+            return list(self._cached_prior_messages), self._cached_session_summary
+
+        prior_messages: List[Any] = []
+        session_summary: Optional[str] = None
+        try:
+            from app.db.database import SessionLocal
+            from app.core.session import get_session, history_limit
+            from app.db.models import Message
+            from sqlalchemy import select
+            from langchain_core.messages import AIMessage, HumanMessage
+
+            async with SessionLocal() as db:
+                s = await get_session(db, s_id)
+                if s:
+                    session_summary = getattr(s, "summary", None)
+                    stmt = (
+                        select(Message)
+                        .where(
+                            Message.session_id == s.id,
+                            Message.summarized.is_(False),
+                            Message.role.in_(("user", "assistant")),
+                        )
+                        .order_by(Message.id.desc())
+                        .limit(history_limit())
+                    )
+                    recent_rows = list((await db.scalars(stmt)).all())
+                    recent_rows.reverse()
+                    for r in recent_rows:
+                        if r.role == "user" and r.content:
+                            prior_messages.append(HumanMessage(content=r.content))
+                        elif r.role == "assistant" and r.content:
+                            prior_messages.append(AIMessage(content=r.content))
+            self._cached_prior_messages = prior_messages
+            self._cached_session_summary = session_summary
+            self._history_loaded = True
+        except Exception as db_hist_err:
+            logger.warning(f"[Voice Flow] Could not load prior messages: {db_hist_err}")
+        return list(prior_messages), session_summary
 
     async def process_turn(
         self,
@@ -802,7 +880,6 @@ class PipecatVoiceAgent:
         precomputed_transcript: str = "",
     ) -> Dict[str, Any]:
         """Process an audio turn through STT -> Entity Normalization -> Tool-Augmented LLM -> TTS."""
-        from app.providers import stt as default_stt, tts as default_tts
         from app.core.context import (
             current_chatbot_id,
             current_user_id,
@@ -813,6 +890,8 @@ class PipecatVoiceAgent:
         from app.utils.tool import reset_search_counter
         from langchain_core.messages import HumanMessage
 
+        default_stt = self._get_stt()
+        default_tts = self._get_tts()
         s_id = session_id or self.session_id or "turn_session"
         logger.info(f"[Pipecat Voice Flow] Processing turn for session {s_id}")
 
@@ -933,43 +1012,13 @@ class PipecatVoiceAgent:
         current_search_attempts.set(0)
         reset_search_counter()
 
-        # 4. Load Conversation Session Summary & Prior Turns for Context
-        prior_messages = []
-        session_summary = None
-        try:
-            from app.db.database import SessionLocal
-            from app.core.session import get_session, history_limit
-            from app.db.models import Message
-            from sqlalchemy import select
-            from langchain_core.messages import AIMessage
-
-            async with SessionLocal() as db:
-                s = await get_session(db, s_id)
-                if s:
-                    session_summary = getattr(s, "summary", None)
-                    stmt = (
-                        select(Message)
-                        .where(
-                            Message.session_id == s.id,
-                            Message.summarized.is_(False),
-                            Message.role.in_(("user", "assistant")),
-                        )
-                        .order_by(Message.id.desc())
-                        .limit(history_limit())
-                    )
-                    recent_rows = list((await db.scalars(stmt)).all())
-                    recent_rows.reverse()
-                    for r in recent_rows:
-                        if r.role == "user" and r.content:
-                            prior_messages.append(HumanMessage(content=r.content))
-                        elif r.role == "assistant" and r.content:
-                            prior_messages.append(AIMessage(content=r.content))
-        except Exception as db_hist_err:
-            logger.warning(f"[Voice Flow] Could not load prior messages: {db_hist_err}")
+        # 4. Load Conversation Session Summary & Prior Turns (cached in memory per session)
+        prior_messages, session_summary = await self._load_session_history(s_id)
 
         # 5. Run Tool-Augmented Agent with System Prompt & Voice Rules
         raw_reply = ""
         streamed_audio_chunks_count = 0
+        run_thread_id = f"{s_id}_{time.monotonic_ns()}"
         try:
             voice_agent, _ = self.build_langchain_agent(thread_id=s_id, summary=session_summary)
             if on_status or on_audio_chunk:
@@ -1051,7 +1100,7 @@ class PipecatVoiceAgent:
 
                 async for event in voice_agent.astream_events(
                     {"messages": agent_messages},
-                    {"configurable": {"thread_id": s_id}},
+                    {"configurable": {"thread_id": run_thread_id}},
                     version="v2",
                 ):
                     if is_interrupted and is_interrupted():
@@ -1164,7 +1213,7 @@ class PipecatVoiceAgent:
                 # Fallback if streaming ended without text
                 if not raw_reply.strip():
                     try:
-                        state = await voice_agent.aget_state({"configurable": {"thread_id": s_id}})
+                        state = await voice_agent.aget_state({"configurable": {"thread_id": run_thread_id}})
                         msgs = state.values.get("messages", [])
                         for m in reversed(msgs):
                             if getattr(m, "type", None) == "ai" and getattr(m, "content", None):
@@ -1193,7 +1242,7 @@ class PipecatVoiceAgent:
                 agent_messages.append(HumanMessage(content=user_content))
                 result = await voice_agent.ainvoke(
                     {"messages": agent_messages},
-                    {"configurable": {"thread_id": s_id}},
+                    {"configurable": {"thread_id": run_thread_id}},
                 )
                 result_messages = result.get("messages", [])
                 for m in reversed(result_messages):
@@ -1232,6 +1281,19 @@ class PipecatVoiceAgent:
                 logger.error(f"[Pipecat Voice Flow] TTS synthesis error: {tts_err}")
 
         is_goodbye = _is_assistant_goodbye(raw_reply, user_transcript=normalized_transcript)
+
+        # Update in-memory session history so subsequent turns avoid a DB round-trip
+        if self._history_loaded and self._cached_prior_messages is not None and reply_text:
+            try:
+                from langchain_core.messages import AIMessage
+                from app.core.session import history_limit
+                self._cached_prior_messages.append(HumanMessage(content=normalized_transcript))
+                self._cached_prior_messages.append(AIMessage(content=reply_text))
+                max_hist = history_limit()
+                if max_hist > 0 and len(self._cached_prior_messages) > max_hist:
+                    del self._cached_prior_messages[:-max_hist]
+            except Exception:
+                pass
 
         return {
             "transcript": normalized_transcript,
@@ -1355,8 +1417,50 @@ class PipecatVoiceAgent:
                         await send_json({"type": "ping", "state": "processing", "turn_id": turn_id})
 
             hb_task = asyncio.create_task(_heartbeat_worker())
+            filler_task: Optional[asyncio.Task] = None
+
+            async def _cancel_filler_task():
+                nonlocal filler_task
+                if filler_task and not filler_task.done():
+                    filler_task.cancel()
+                    try:
+                        await filler_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                filler_task = None
+
+            async def _stream_filler_audio(msg: str):
+                try:
+                    raw_pcm = _FILLER_AUDIO_CACHE.get(msg)
+                    if not raw_pcm:
+                        default_tts = self._get_tts()
+                        filler_audio = await default_tts.synthesize(msg)
+                        if filler_audio:
+                            raw_pcm = filler_audio
+                            if raw_pcm.startswith(b"RIFF") and len(raw_pcm) > 44:
+                                raw_pcm = raw_pcm[44:]
+                            _FILLER_AUDIO_CACHE[msg] = raw_pcm
+
+                    if raw_pcm:
+                        chunk_size = 4096
+                        for i in range(0, len(raw_pcm), chunk_size):
+                            if interrupted or disconnect_event.is_set() or turn_id != current_active_turn_id:
+                                break
+                            chunk = raw_pcm[i:i + chunk_size]
+                            sent = await send_bytes(chunk)
+                            if not sent:
+                                break
+                            await asyncio.sleep(0.015)
+                except asyncio.CancelledError:
+                    pass
+                except Exception as filler_err:
+                    logger.warning(f"Error streaming filler audio: {filler_err}")
+                finally:
+                    if not interrupted and not is_speaking and turn_id == current_active_turn_id:
+                        await send_json({"type": "state", "state": "thinking", "turn_id": turn_id})
 
             async def _notify_tool_status(status_type: str, status_msg: str, tool_name: str):
+                nonlocal filler_task
                 await send_json({
                     "type": "status",
                     "status": status_type,
@@ -1379,31 +1483,10 @@ class PipecatVoiceAgent:
                         "sample_rate": 24000,
                         "turn_id": turn_id,
                     })
-                    # Stream small filler audio chunk (e.g. "I am searching in the documents...")
-                    try:
-                        raw_pcm = _FILLER_AUDIO_CACHE.get(status_msg)
-                        if not raw_pcm:
-                            from app.providers import tts as default_tts
-                            filler_audio = await default_tts.synthesize(status_msg)
-                            if filler_audio:
-                                raw_pcm = filler_audio
-                                if raw_pcm.startswith(b"RIFF") and len(raw_pcm) > 44:
-                                    raw_pcm = raw_pcm[44:]
-                                _FILLER_AUDIO_CACHE[status_msg] = raw_pcm
-
-                        if raw_pcm:
-                            chunk_size = 4096
-                            for i in range(0, len(raw_pcm), chunk_size):
-                                if interrupted or disconnect_event.is_set():
-                                    break
-                                chunk = raw_pcm[i:i + chunk_size]
-                                sent = await send_bytes(chunk)
-                                if not sent:
-                                    break
-                                await asyncio.sleep(0.015)
-                    except Exception as filler_err:
-                        logger.warning(f"Error streaming filler audio: {filler_err}")
-                    await send_json({"type": "state", "state": "thinking", "turn_id": turn_id})
+                    await _cancel_filler_task()
+                    filler_task = asyncio.create_task(_stream_filler_audio(status_msg))
+                elif status_type == "tool_completed":
+                    await _cancel_filler_task()
 
             async def _on_phrase_stream(phrase: str, running_text: str):
                 if not is_connected or interrupted or turn_id != current_active_turn_id:
@@ -1420,6 +1503,8 @@ class PipecatVoiceAgent:
                 nonlocal is_speaking
                 if not is_connected or interrupted or turn_id != current_active_turn_id:
                     return
+                if filler_task and not filler_task.done():
+                    await _cancel_filler_task()
                 if not is_speaking:
                     is_speaking = True
                     await send_json({"type": "state", "state": "speaking", "turn_id": turn_id})
@@ -1478,6 +1563,7 @@ class PipecatVoiceAgent:
             finally:
                 heartbeat_stop.set()
                 hb_task.cancel()
+                await _cancel_filler_task()
 
             # Abort if interrupted while processing or a newer turn took over
             if interrupted or turn_id != current_active_turn_id or turn_result.get("action") == "interrupted":
@@ -1630,7 +1716,7 @@ class PipecatVoiceAgent:
                 "sample_rate": 24000,
                 "turn_id": greet_turn_id,
             })
-            from app.providers import tts as default_tts
+            default_tts = self._get_tts()
             gen = default_tts.stream(greeting_clean)
             total_greeting_bytes = 0
             try:
@@ -1699,7 +1785,7 @@ class PipecatVoiceAgent:
                             data = {}
 
                         m_type = data.get("type")
-                        if m_type == "hangup":
+                        if m_type in ("hangup", "end_call"):
                             await cancel_active_turn()
                             await send_json({"type": "call_ended", "reason": "user_hangup"})
                             is_connected = False
@@ -1732,7 +1818,7 @@ class PipecatVoiceAgent:
 
         async def audio_worker():
             nonlocal turn_counter, interrupted, is_speaking, is_processing, active_turn_task, session_language
-            from app.providers import stt as default_stt
+            default_stt = self._get_stt()
             import time
             last_speaker_active_at = 0.0
 
@@ -1828,6 +1914,19 @@ class PipecatVoiceAgent:
         except Exception as exc:
             logger.error(f"[Pipecat WebSocket Flow] Error: {exc}")
         finally:
+            try:
+                if self._session_stt is not None and hasattr(self._session_stt, "aclose"):
+                    await self._session_stt.aclose()
+                    self._session_stt = None
+                if self._session_tts is not None and hasattr(self._session_tts, "aclose"):
+                    await self._session_tts.aclose()
+                    self._session_tts = None
+                if self._owns_http_client and self._http_client and not getattr(self._http_client, "is_closed", True):
+                    await self._http_client.aclose()
+                    self._http_client = None
+                    self._owns_http_client = False
+            except Exception:
+                pass
             logger.info(f"[Pipecat WebSocket Flow] Ended session {s_id}")
 
 

@@ -367,6 +367,7 @@ async def voice_ws(
             chatbot_id=active_chatbot_id,
             user_id=owner_user_id,
             system_instruction=system_prompt,
+            http_client=getattr(ws.app.state, "http_client", None),
         )
         await pipecat_agent.run_websocket_session(ws, session_id=session_id, initial_language=language)
         return
